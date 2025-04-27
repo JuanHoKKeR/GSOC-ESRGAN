@@ -22,4 +22,4 @@ cache/
 bazel-*
 
 # dataset
-ESRGAN/dataset/*
+ESRGAN/dataset/
