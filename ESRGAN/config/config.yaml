@@ -3,9 +3,9 @@ checkpoint_path:
   phase_2: "checkpoints/phase_2"
 
 dataset: 
-  name: "div2k"
+  name: "Microscopy"
   scale_method: "bicubic"
-  hr_dimension: 512
+  hr_dimension: 1024
 
 print_step: 1000
 

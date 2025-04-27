@@ -5,6 +5,7 @@ from absl import logging
 from lib import settings, train, model, utils
 from tensorflow.python.eager import profiler
 import tensorflow.compat.v2 as tf
+import wandb
 tf.enable_v2_behavior()
 """ Enhanced Super Resolution GAN.
     Citation:
@@ -42,6 +43,16 @@ def main(**kwargs):
         model_dir: directory to store the model into.
   """
 
+  if not kwargs["no_wandb"]:
+    wandb_config = {
+        "batch_size": settings.Settings(kwargs["config"])["batch_size"],
+        "dataset": settings.Settings(kwargs["config"])["dataset"],
+        "learning_rate_phase1": settings.Settings(kwargs["config"])["train_psnr"]["adam"]["initial_lr"],
+        "learning_rate_phase2": settings.Settings(kwargs["config"])["train_combined"]["adam"]["initial_lr"],
+        "interpolation_parameter": settings.Settings(kwargs["config"])["interpolation_parameter"],
+    }
+    wandb.init(project="esrgan-microscopy", config=wandb_config)
+
   for physical_device in tf.config.experimental.list_physical_devices("GPU"):
     tf.config.experimental.set_memory_growth(physical_device, True)
   strategy = utils.SingleDeviceStrategy()
@@ -73,7 +84,8 @@ def main(**kwargs):
           model_dir=kwargs["model_dir"],
           data_dir=kwargs["data_dir"],
           manual=kwargs["manual"],
-          strategy=strategy)
+          strategy=strategy,
+          use_wandb=not kwargs["no_wandb"])
       phases = list(map(lambda x: x.strip(),
                         kwargs["phases"].lower().split("_")))
       if not Stats["train_step_1"] and "phase1" in phases:
@@ -96,6 +108,10 @@ def main(**kwargs):
     tf.saved_model.save(
         interpolated_generator, os.path.join(
             kwargs["model_dir"], "esrgan"))
+    
+    if not kwargs["no_wandb"]:
+      wandb.save(os.path.join(kwargs["model_dir"], "esrgan"))
+      wandb.finish()
 
 
 if __name__ == '__main__':
@@ -134,6 +150,11 @@ if __name__ == '__main__':
       "--tpu",
       default="",
       help="Name of the TPU to be used")
+  parser.add_argument(
+      "--no_wandb",
+      default=False,
+      action="store_true",
+      help="Disable Weight and Biases logging")
   parser.add_argument(
       "-v",
       "--verbose",

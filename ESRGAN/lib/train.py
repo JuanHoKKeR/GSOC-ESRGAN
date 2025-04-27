@@ -4,6 +4,11 @@ from functools import partial
 from absl import logging
 import tensorflow as tf
 from lib import utils, dataset
+try:
+  import wandb
+  WANDB_AVAILABLE = True
+except ImportError:
+  WANDB_AVAILABLE = False
 
 
 class Trainer(object):
@@ -159,6 +164,43 @@ class Trainer(object):
         tf.summary.scalar(
             "warmup_loss", metric.result(), step=G_optimizer.iterations)
         tf.summary.scalar("mean_psnr", psnr_metric.result(), G_optimizer.iterations)
+
+      # Registrar métricas en wandb si está habilitado
+      if self.use_wandb and not num_steps % self.settings["print_step"]:
+        # Convertir a numpy para evitar problemas con tensores de TensorFlow
+        loss_value = float(metric.result().numpy())
+        psnr_value = float(psnr_metric.result().numpy())
+        current_lr = float(G_optimizer.learning_rate.numpy())
+        
+        # Registrar en wandb
+        wandb.log({
+            "phase1/loss": loss_value,
+            "phase1/psnr": psnr_value,
+            "phase1/learning_rate": current_lr,
+            "phase1/step": int(num_steps.numpy()),
+        })
+        
+        # Opcional: Añadir imagen generada como ejemplo cada cierto número de pasos
+        if not num_steps % (self.settings["print_step"] * 10):
+            # Selecciona un ejemplo de la batch
+            sample_lr = image_lr[0]
+            sample_hr = image_hr[0]
+            sample_fake = generator.unsigned_call(tf.expand_dims(sample_lr, 0))[0]
+            
+            # Convertir a formato correcto para wandb
+            sample_lr = tf.cast(tf.clip_by_value(sample_lr, 0, 255), tf.uint8).numpy()
+            sample_hr = tf.cast(tf.clip_by_value(sample_hr, 0, 255), tf.uint8).numpy()
+            sample_fake = tf.cast(tf.clip_by_value(sample_fake, 0, 255), tf.uint8).numpy()
+            
+            # Registrar imágenes
+            wandb.log({
+                "phase1/samples": [
+                    wandb.Image(sample_lr, caption="Low Resolution"),
+                    wandb.Image(sample_fake, caption="Generated"),
+                    wandb.Image(sample_hr, caption="High Resolution")
+                ],
+                "phase1/step": int(num_steps.numpy()),
+            })      
 
       if not num_steps % self.settings["print_step"]:
         logging.info(
@@ -328,6 +370,48 @@ class Trainer(object):
         tf.summary.scalar(
             "disc_loss", disc_metric.result(), step=D_optimizer.iterations)
         tf.summary.scalar("mean_psnr", psnr_metric.result(), step=D_optimizer.iterations)
+
+      # Registrar métricas en wandb si está habilitado
+      if self.use_wandb and not num_step % self.settings["print_step"]:
+        # Convertir a numpy para evitar problemas con tensores de TensorFlow
+        gen_loss_value = float(gen_metric.result().numpy())
+        disc_loss_value = float(disc_metric.result().numpy())
+        psnr_value = float(psnr_metric.result().numpy())
+        g_current_lr = float(G_optimizer.learning_rate.numpy())
+        d_current_lr = float(D_optimizer.learning_rate.numpy())
+        
+        # Registrar en wandb
+        wandb.log({
+            "phase2/gen_loss": gen_loss_value,
+            "phase2/disc_loss": disc_loss_value,
+            "phase2/psnr": psnr_value,
+            "phase2/G_learning_rate": g_current_lr,
+            "phase2/D_learning_rate": d_current_lr,
+            "phase2/step": int(num_step.numpy()),
+        })
+        
+        # Opcional: Añadir imagen generada como ejemplo cada cierto número de pasos
+        if not num_step % (self.settings["print_step"] * 10):
+            # Selecciona un ejemplo de la batch
+            sample_lr = image_lr[0]
+            sample_hr = image_hr[0]
+            sample_fake = generator.unsigned_call(tf.expand_dims(sample_lr, 0))[0]
+            
+            # Post-procesar las imágenes para visualización
+            sample_lr = tf.cast(tf.clip_by_value(utils.preprocess_input(sample_lr) + tf.constant([103.939, 116.779, 123.68]), 0, 255), tf.uint8).numpy()
+            sample_hr = tf.cast(tf.clip_by_value(utils.preprocess_input(sample_hr) + tf.constant([103.939, 116.779, 123.68]), 0, 255), tf.uint8).numpy()
+            sample_fake = tf.cast(tf.clip_by_value(sample_fake, 0, 255), tf.uint8).numpy()
+            
+            # Registrar imágenes
+            wandb.log({
+                "phase2/samples": [
+                    wandb.Image(sample_lr, caption="Low Resolution"),
+                    wandb.Image(sample_fake, caption="Generated"),
+                    wandb.Image(sample_hr, caption="High Resolution")
+                ],
+                "phase2/step": int(num_step.numpy()),
+            })
+
 
       # Logging and Checkpointing
       if not num_step % self.settings["print_step"]:
