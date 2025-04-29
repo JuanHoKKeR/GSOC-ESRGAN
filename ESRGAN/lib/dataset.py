@@ -379,24 +379,12 @@ def load_dataset_from_meta_info(
         base_path="",
         transforms=None,
         batch_size=16,
-        buffer_size=10000,
+        buffer_size=1000,
         repeat=True,
-        shuffle=True):
-    """Carga datos desde archivos meta_info que contienen rutas de imágenes.
-    
-    Args:
-        hr_meta_file: Ruta al archivo meta_info con imágenes de alta resolución
-        lr_meta_file: Ruta al archivo meta_info con imágenes de baja resolución
-        base_path: Ruta base para las imágenes si las rutas en meta_info son relativas
-        transforms: Función de transformación a aplicar a las imágenes
-        batch_size: Tamaño del batch
-        buffer_size: Tamaño del buffer para shuffle
-        repeat: Si el dataset se debe repetir
-        shuffle: Si el dataset se debe mezclar
-        
-    Returns:
-        TF Dataset con pares (LR, HR) de imágenes.
-    """
+        shuffle=True,
+        lr_size=(128, 128),  # Añadido tamaño LR
+        hr_size=(512, 512)): # Añadido tamaño HR
+    """Carga datos desde archivos meta_info que contienen rutas de imágenes."""
     # Cargar rutas de archivos de meta_info
     hr_paths = []
     with open(hr_meta_file, 'r') as f:
@@ -412,58 +400,37 @@ def load_dataset_from_meta_info(
     if len(hr_paths) == 0 or len(lr_paths) == 0:
         raise ValueError(f"No se encontraron imágenes en los archivos meta_info: {hr_meta_file}, {lr_meta_file}")
     
-    # Función para emparejar imágenes HR y LR
-    def match_pairs(hr_paths, lr_paths):
-        """Empareja imágenes HR y LR basándose en nombres similares"""
-        pairs = []
-        # Para este ejemplo, asumimos una relación 1:1 entre archivos
-        # Si los nombres no coinciden exactamente, necesitarás una lógica más compleja aquí
-        
-        # Si hay diferente cantidad de imágenes, usamos la menor cantidad
-        min_len = min(len(hr_paths), len(lr_paths))
-        
-        # Si los nombres están relacionados, podríamos tratar de emparejarlos
-        # Pero como es difícil determinar la relación exacta desde el ejemplo,
-        # por ahora simplemente seleccionaremos aleatoriamente
-        hr_indices = list(range(len(hr_paths)))
-        lr_indices = list(range(len(lr_paths)))
-        
-        random.shuffle(hr_indices)
-        random.shuffle(lr_indices)
-        
-        for i in range(min_len):
-            pairs.append((lr_paths[lr_indices[i]], hr_paths[hr_indices[i]]))
-        
-        return pairs
-    
-    # Generar pares de imágenes
-    image_pairs = match_pairs(hr_paths, lr_paths)
-    print(f"Se generaron {len(image_pairs)} pares de imágenes LR-HR")
-    
-    # Crear listas separadas para LR y HR
-    lr_files = [pair[0] for pair in image_pairs]
-    hr_files = [pair[1] for pair in image_pairs]
-    
     # Crear TF Dataset
-    lr_ds = tf.data.Dataset.from_tensor_slices(lr_files)
-    hr_ds = tf.data.Dataset.from_tensor_slices(hr_files)
+    lr_ds = tf.data.Dataset.from_tensor_slices(lr_paths)
+    hr_ds = tf.data.Dataset.from_tensor_slices(hr_paths)
     
-    # Función para cargar y procesar imágenes
-    def load_and_process_image(file_path):
+    # Función para cargar y procesar imágenes LR
+    def load_and_process_lr_image(file_path):
         img = tf.io.read_file(file_path)
         img = tf.image.decode_jpeg(img, channels=3)
+        # Redimensionar a lr_size
+        img = tf.image.resize(img, lr_size, method='bicubic')
         return tf.cast(img, tf.float32)
     
-    # Aplicar la función de carga
-    lr_ds = lr_ds.map(load_and_process_image, num_parallel_calls=tf.data.AUTOTUNE)
-    hr_ds = hr_ds.map(load_and_process_image, num_parallel_calls=tf.data.AUTOTUNE)
+    # Función para cargar y procesar imágenes HR
+    def load_and_process_hr_image(file_path):
+        img = tf.io.read_file(file_path)
+        img = tf.image.decode_jpeg(img, channels=3)
+        # Redimensionar a hr_size
+        img = tf.image.resize(img, hr_size, method='bicubic')
+        return tf.cast(img, tf.float32)
     
+    # Aplicar las funciones de carga específicas
+    lr_ds = lr_ds.map(load_and_process_lr_image, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    hr_ds = hr_ds.map(load_and_process_hr_image, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    
+    # Resto del código igual...
     # Combinar datasets
     dataset = tf.data.Dataset.zip((lr_ds, hr_ds))
     
     # Aplicar transformaciones si se proporcionan
     if transforms:
-        dataset = dataset.map(transforms, num_parallel_calls=tf.data.AUTOTUNE)
+        dataset = dataset.map(transforms, num_parallel_calls=tf.data.experimental.AUTOTUNE)
     
     # Configurar dataset
     if shuffle:
@@ -473,6 +440,6 @@ def load_dataset_from_meta_info(
         dataset = dataset.repeat()
     
     dataset = dataset.batch(batch_size)
-    dataset = dataset.prefetch(tf.data.AUTOTUNE)
+    dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
     
     return dataset

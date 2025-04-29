@@ -1,0 +1,25 @@
+version: '3'
+
+services:
+  esrgan:
+    build: .
+    image: esrgan-gpu:latest
+    container_name: esrgan-container
+    volumes:
+      - ./ESRGAN:/workspace
+      - /media/adalab/A61ABBC31ABB8F35:/media/adalab/A61ABBC31ABB8F35
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - TF_FORCE_GPU_ALLOW_GROWTH=true
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - PYTHONPATH=/workspace
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    tty: true
+    stdin_open: true
+    command: bash

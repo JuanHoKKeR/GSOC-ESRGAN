@@ -111,7 +111,9 @@ class Trainer(object):
     start_time = time.time()
     # Training starts
 
-    def _step_fn(image_lr, image_hr):
+    def _step_fn(**kwargs):
+      image_lr = kwargs["image_lr"]
+      image_hr = kwargs["image_hr"]
       logging.debug("Starting Distributed Step")
       with tf.GradientTape() as tape:
         fake = generator.unsigned_call(image_lr)
@@ -122,7 +124,9 @@ class Trainer(object):
                   fake,
                   image_hr,
                   max_val=256.0)))
-      gen_vars = list(set(generator.trainable_variables))
+      # Eliminar la conversión a set que causa el error
+      # gen_vars = list(set(generator.trainable_variables))
+      gen_vars = generator.trainable_variables  # Usar directamente las variables
       gradient = tape.gradient(loss, gen_vars)
       G_optimizer.apply_gradients(
           zip(gradient, gen_vars))
@@ -132,11 +136,11 @@ class Trainer(object):
 
     @tf.function
     def train_step(image_lr, image_hr):
-      distributed_metric = self.strategy.experimental_run_v2(
-          _step_fn, args=[image_lr, image_hr])
-      mean_metric = self.strategy.reduce(
-          tf.distribute.ReduceOp.MEAN, distributed_metric, axis=None)
-      return mean_metric
+        distributed_metric = self.strategy.experimental_run_v2(
+            _step_fn, args=[], kwargs={"image_lr": image_lr, "image_hr": image_hr})
+        mean_metric = self.strategy.reduce(
+            tf.distribute.ReduceOp.MEAN, distributed_metric, axis=None)
+        return mean_metric
 
     while True:
       image_lr, image_hr = next(self.dataset)
@@ -276,7 +280,9 @@ class Trainer(object):
         input_shape=[hr_dimension, hr_dimension, 3],
         loss_type=phase_args["perceptual_loss_type"])
     logging.debug("Loaded Model")
-    def _step_fn(image_lr, image_hr):
+    def _step_fn(**kwargs):
+      image_lr = kwargs["image_lr"]
+      image_hr = kwargs["image_hr"]
       logging.debug("Starting Distributed Step")
       with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
         fake = generator.unsigned_call(image_lr)
@@ -322,14 +328,13 @@ class Trainer(object):
 
     @tf.function
     def train_step(image_lr, image_hr):
-      distributed_iterations = self.strategy.experimental_run_v2(
-          _step_fn,
-          args=(image_lr, image_hr))
-      num_steps = self.strategy.reduce(
-          tf.distribute.ReduceOp.MEAN,
-          distributed_iterations,
-          axis=None)
-      return num_steps
+        distributed_iterations = self.strategy.experimental_run_v2(
+            _step_fn, args=[], kwargs={"image_lr": image_lr, "image_hr": image_hr})
+        num_steps = self.strategy.reduce(
+            tf.distribute.ReduceOp.MEAN,
+            distributed_iterations,
+            axis=None)
+        return num_steps
     start = time.time()
     last_psnr = 0
     while True:
