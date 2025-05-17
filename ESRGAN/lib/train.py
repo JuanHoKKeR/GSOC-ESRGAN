@@ -57,6 +57,7 @@ class Trainer(object):
               self.dataset))
     else:
       if not manual:
+        self.dataset.repeat()
         self.dataset = iter(dataset.load_dataset(
             dataset_args["name"],
             dataset.scale_down(
@@ -67,6 +68,7 @@ class Trainer(object):
             augment=True,
             shuffle=True))
       else:
+        self.dataset.repeat()
         self.dataset = iter(dataset.load_dataset_directory(
             dataset_args["name"],
             data_dir,
@@ -136,7 +138,7 @@ class Trainer(object):
 
     @tf.function
     def train_step(image_lr, image_hr):
-        distributed_metric = self.strategy.experimental_run_v2(
+        distributed_metric = self.strategy.run(
             _step_fn, args=[], kwargs={"image_lr": image_lr, "image_hr": image_hr})
         mean_metric = self.strategy.reduce(
             tf.distribute.ReduceOp.MEAN, distributed_metric, axis=None)
@@ -328,7 +330,7 @@ class Trainer(object):
 
     @tf.function
     def train_step(image_lr, image_hr):
-        distributed_iterations = self.strategy.experimental_run_v2(
+        distributed_iterations = self.strategy.run(
             _step_fn, args=[], kwargs={"image_lr": image_lr, "image_hr": image_hr})
         num_steps = self.strategy.reduce(
             tf.distribute.ReduceOp.MEAN,

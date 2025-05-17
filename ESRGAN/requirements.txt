@@ -24,7 +24,7 @@ grpcio==1.48.2
 h5py==2.10.0
 idna==2.6
 importlib-metadata==4.8.3
-importlib-resources==5.4.0
+importlib-resources==4.2.0
 Keras-Applications==1.0.8
 Keras-Preprocessing==1.1.0
 keyring==10.6.0
@@ -57,7 +57,6 @@ six==1.17.0
 smmap==5.0.0
 tensorboard==2.2.2
 tensorboard-plugin-wit==1.8.1
-tensorflow==2.2.0
 tensorflow-datasets==1.2.0
 tensorflow-estimator==2.2.0
 tensorflow-gpu==2.2.0

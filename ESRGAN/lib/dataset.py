@@ -367,7 +367,7 @@ def load_tfrecord_dataset(
   if len(files) == 1:
     option = tf.data.Options()
     option.auto_shard = False
-    ds.with_options(ds)
+    ds = ds.with_options(ds)
   if shuffle:
     ds = ds.shuffle(shuffle_buffer, reshuffle_each_iteration=True)
   return ds
