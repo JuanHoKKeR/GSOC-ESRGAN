@@ -382,9 +382,29 @@ def load_dataset_from_meta_info(
         buffer_size=1000,
         repeat=True,
         shuffle=True,
-        lr_size=(128, 128),  # Añadido tamaño LR
-        hr_size=(512, 512)): # Añadido tamaño HR
-    """Carga datos desde archivos meta_info que contienen rutas de imágenes."""
+        lr_size=(128, 128),
+        hr_size=(512, 512)):
+    """Carga datos desde archivos meta_info que contienen rutas de imágenes.
+    
+    Args:
+        hr_meta_file: Ruta al archivo meta_info con imágenes HR
+        lr_meta_file: Ruta al archivo meta_info con imágenes LR
+        base_path: Ruta base para añadir a las rutas en los archivos meta_info
+        transforms: Función opcional para transformar las imágenes
+        batch_size: Tamaño del batch
+        buffer_size: Tamaño del buffer para shuffle
+        repeat: Si se debe repetir el dataset indefinidamente
+        shuffle: Si se debe barajar el dataset
+        lr_size: Tamaño objetivo para imágenes de baja resolución (altura, ancho)
+        hr_size: Tamaño objetivo para imágenes de alta resolución (altura, ancho)
+        
+    Returns:
+        Un tf.data.Dataset con pares (LR, HR) de imágenes
+    """
+    import tensorflow as tf
+    import os
+    from absl import logging
+    
     # Cargar rutas de archivos de meta_info
     hr_paths = []
     with open(hr_meta_file, 'r') as f:
@@ -394,52 +414,112 @@ def load_dataset_from_meta_info(
     with open(lr_meta_file, 'r') as f:
         lr_paths = [os.path.join(base_path, line.strip()) for line in f if line.strip()]
     
-    print(f"Cargadas {len(hr_paths)} imágenes HR y {len(lr_paths)} imágenes LR")
+    logging.info(f"Cargadas {len(hr_paths)} imágenes HR y {len(lr_paths)} imágenes LR")
+    
+    # Verificar las primeras rutas para depuración
+    if hr_paths:
+        logging.debug(f"Primera ruta HR: {hr_paths[0]}")
+        logging.debug(f"Existe archivo: {os.path.exists(hr_paths[0])}")
+    if lr_paths:
+        logging.debug(f"Primera ruta LR: {lr_paths[0]}")
+        logging.debug(f"Existe archivo: {os.path.exists(lr_paths[0])}")
     
     # Verificar que tenemos suficientes imágenes
     if len(hr_paths) == 0 or len(lr_paths) == 0:
         raise ValueError(f"No se encontraron imágenes en los archivos meta_info: {hr_meta_file}, {lr_meta_file}")
     
+    # Verificar que el número de imágenes coincide
+    if len(hr_paths) != len(lr_paths):
+        logging.warning(f"Número diferente de imágenes HR ({len(hr_paths)}) y LR ({len(lr_paths)})")
+    
     # Crear TF Dataset
     lr_ds = tf.data.Dataset.from_tensor_slices(lr_paths)
     hr_ds = tf.data.Dataset.from_tensor_slices(hr_paths)
     
-    # Función para cargar y procesar imágenes LR
+    # Función para cargar y procesar imágenes LR con manejo de errores
     def load_and_process_lr_image(file_path):
-        img = tf.io.read_file(file_path)
-        img = tf.image.decode_jpeg(img, channels=3)
-        # Redimensionar a lr_size
-        img = tf.image.resize(img, lr_size, method='bicubic')
-        return tf.cast(img, tf.float32)
+        try:
+            img = tf.io.read_file(file_path)
+            # Intentar decodificar como JPEG, si falla, intentar como PNG
+            try:
+                img = tf.image.decode_jpeg(img, channels=3)
+            except tf.errors.InvalidArgumentError:
+                try:
+                    img = tf.image.decode_png(img, channels=3)
+                except:
+                    logging.error(f"Error al decodificar imagen: {file_path}")
+                    # Crear una imagen en negro como fallback
+                    img = tf.zeros((*lr_size, 3), dtype=tf.uint8)
+            
+            # Convertir a float32 antes de redimensionar
+            img = tf.cast(img, tf.float32)
+            
+            # Verificar que la imagen tiene al menos 3 canales
+            if img.shape[-1] != 3:
+                img = tf.image.grayscale_to_rgb(img)
+                
+            # Redimensionar a lr_size
+            img = tf.image.resize(img, lr_size, method='bicubic')
+            
+            # Clip values between 0-255
+            return tf.clip_by_value(img, 0, 255)
+        except Exception as e:
+            logging.error(f"Error en imagen LR {file_path}: {e}")
+            return tf.zeros((*lr_size, 3), dtype=tf.float32)
     
     # Función para cargar y procesar imágenes HR
     def load_and_process_hr_image(file_path):
-        img = tf.io.read_file(file_path)
-        img = tf.image.decode_jpeg(img, channels=3)
-        # Redimensionar a hr_size
-        img = tf.image.resize(img, hr_size, method='bicubic')
-        return tf.cast(img, tf.float32)
+        try:
+            img = tf.io.read_file(file_path)
+            # Intentar decodificar como JPEG, si falla, intentar como PNG
+            try:
+                img = tf.image.decode_jpeg(img, channels=3)
+            except tf.errors.InvalidArgumentError:
+                try:
+                    img = tf.image.decode_png(img, channels=3)
+                except:
+                    logging.error(f"Error al decodificar imagen: {file_path}")
+                    # Crear una imagen en negro como fallback
+                    img = tf.zeros((*hr_size, 3), dtype=tf.uint8)
+            
+            # Convertir a float32 antes de redimensionar
+            img = tf.cast(img, tf.float32)
+            
+            # Verificar que la imagen tiene al menos 3 canales
+            if img.shape[-1] != 3:
+                img = tf.image.grayscale_to_rgb(img)
+                
+            # Redimensionar a hr_size
+            img = tf.image.resize(img, hr_size, method='bicubic')
+            
+            # Clip values between 0-255
+            return tf.clip_by_value(img, 0, 255)
+        except Exception as e:
+            logging.error(f"Error en imagen HR {file_path}: {e}")
+            return tf.zeros((*hr_size, 3), dtype=tf.float32)
     
-    # Aplicar las funciones de carga específicas
-    lr_ds = lr_ds.map(load_and_process_lr_image, num_parallel_calls=tf.data.experimental.AUTOTUNE)
-    hr_ds = hr_ds.map(load_and_process_hr_image, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    # Aplicar las funciones de carga
+    lr_ds = lr_ds.map(load_and_process_lr_image, 
+                      num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    hr_ds = hr_ds.map(load_and_process_hr_image,
+                      num_parallel_calls=tf.data.experimental.AUTOTUNE)
     
-    # Resto del código igual...
     # Combinar datasets
     dataset = tf.data.Dataset.zip((lr_ds, hr_ds))
     
-    # Aplicar transformaciones si se proporcionan
+    # Aplicar transformaciones adicionales si se proporcionan
     if transforms:
-        dataset = dataset.map(transforms, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        dataset = dataset.map(transforms, 
+                             num_parallel_calls=tf.data.experimental.AUTOTUNE)
     
     # Configurar dataset
     if shuffle:
-        dataset = dataset.shuffle(buffer_size)
+        dataset = dataset.shuffle(buffer_size, reshuffle_each_iteration=True)
     
     if repeat:
         dataset = dataset.repeat()
     
-    dataset = dataset.batch(batch_size)
+    dataset = dataset.batch(batch_size, drop_remainder=True)
     dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
     
     return dataset

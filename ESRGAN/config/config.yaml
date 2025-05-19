@@ -9,7 +9,7 @@ dataset:
   name: Microscopy
   scale_method: bicubic
 interpolation_parameter: 0.8
-print_step: 1000
+print_step: 500
 train_combined:
   adam:
     beta_1: 0.9
@@ -17,16 +17,16 @@ train_combined:
     decay:
       factor: 0.5
       step:
-      - 9000
+      - 5000
+      - 15000
       - 30000
-      - 50000
+      - 60000
       - 100000
-      - 200000
-      - 300000
-    initial_lr: 5.0e-05
+      - 150000
+    initial_lr: 1.0e-05
   eta: 0.01
   lambda: 0.005
-  num_steps: 400000
+  num_steps: 200000
   perceptual_loss_type: L1
 train_psnr:
   adam:
@@ -34,6 +34,6 @@ train_psnr:
     beta_2: 0.999
     decay:
       factor: 0.5
-      step: 200000
-    initial_lr: 0.0002
-  num_steps: 600000
+      step: 100000
+    initial_lr: 0.0001
+  num_steps: 300000

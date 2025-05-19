@@ -232,8 +232,16 @@ class SingleDeviceStrategy(object):
 
   def experimental_run_v2(self, fn, args, kwargs):
     return fn(*args, **kwargs)
+  
+  # Añadir método run para compatibilidad con versiones más nuevas de TF
+  def run(self, fn, args=None, kwargs=None):
+    if args is None:
+        args = []
+    if kwargs is None:
+        kwargs = {}
+    return self.experimental_run_v2(fn, args, kwargs)
 
-  def reduce(reduction_type, distributed_data, axis):
+  def reduce(self, reduction_type, distributed_data, axis=None):
     return distributed_data
 
   def scope(self):

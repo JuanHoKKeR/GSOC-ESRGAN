@@ -24,7 +24,6 @@ grpcio==1.48.2
 h5py==2.10.0
 idna==2.6
 importlib-metadata==4.8.3
-importlib-resources==4.2.0
 Keras-Applications==1.0.8
 Keras-Preprocessing==1.1.0
 keyring==10.6.0

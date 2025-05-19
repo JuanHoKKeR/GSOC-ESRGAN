@@ -2,10 +2,83 @@ import os
 import argparse
 import yaml
 from absl import logging
-import wandb
 import tensorflow as tf
 from lib.dataset import load_dataset_from_meta_info
 from lib import settings, train, model, utils
+
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    logging.warning("Wandb no está disponible. Continuando sin tracking.")
+
+class CustomTrainer(train.Trainer):
+    """Trainer personalizado para usar con archivos meta_info."""
+    
+    def __init__(
+            self,
+            summary_writer,
+            summary_writer_2,
+            settings,
+            model_dir="",
+            hr_meta_file=None,
+            lr_meta_file=None,
+            base_path="",
+            strategy=None,
+            use_wandb=False):
+        """Inicializa el entrenador personalizado para dataset de microscopía.
+        
+        Args:
+            summary_writer: Writer para TensorBoard fase 1
+            summary_writer_2: Writer para TensorBoard fase 2
+            settings: Objeto Settings con configuración
+            model_dir: Directorio para guardar el modelo
+            hr_meta_file: Ruta al archivo meta_info de alta resolución
+            lr_meta_file: Ruta al archivo meta_info de baja resolución
+            base_path: Ruta base para las imágenes
+            strategy: Estrategia de distribución (None o SingleDeviceStrategy)
+            use_wandb: Si se debe usar Weights & Biases
+        """
+        # No llamamos a super().__init__ porque queremos reemplazar completamente
+        # la inicialización del dataset, pero tomamos los demás parámetros.
+        self.settings = settings
+        self.model_dir = model_dir
+        self.summary_writer = summary_writer
+        self.summary_writer_2 = summary_writer_2
+        self.strategy = strategy if strategy is not None else utils.SingleDeviceStrategy()
+        self.use_wandb = use_wandb and WANDB_AVAILABLE
+        self.batch_size = self.settings["batch_size"]
+        
+        # Comprobar que los archivos existen
+        for file_path in [hr_meta_file, lr_meta_file]:
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"No se encuentra el archivo {file_path}")
+        
+        logging.info(f"Cargando dataset desde meta_info...")
+        logging.info(f"HR meta: {hr_meta_file}")
+        logging.info(f"LR meta: {lr_meta_file}")
+        
+        # Cargar el dataset desde los archivos meta_info
+        try:
+            dataset_iter = load_dataset_from_meta_info(
+                hr_meta_file=hr_meta_file,
+                lr_meta_file=lr_meta_file,
+                base_path=base_path,
+                batch_size=self.batch_size,
+                shuffle=True,
+                lr_size=(128, 128),
+                hr_size=(512, 512)
+            )
+            # Verificar que el dataset está funcionando correctamente
+            sample = next(iter(dataset_iter))
+            logging.info(f"Muestra de dataset - LR shape: {sample[0].shape}, HR shape: {sample[1].shape}")
+            
+            self.dataset = iter(dataset_iter)
+            logging.info("Dataset cargado correctamente")
+        except Exception as e:
+            logging.error(f"Error al cargar el dataset: {e}")
+            raise
 
 def main():
     parser = argparse.ArgumentParser(description="Entrenar ESRGAN con imágenes de microscopía usando archivos meta_info y wandb")
@@ -72,44 +145,50 @@ def main():
     log_level = log_levels[min(args.verbose, len(log_levels) - 1)]
     logging.set_verbosity(log_level)
     
+    # Configurar directorios
+    for directory in [args.model_dir, args.log_dir]:
+        os.makedirs(directory, exist_ok=True)
+    
     # Configurar wandb
-    if not args.no_wandb:
-        wandb.init(
-            project=args.wandb_project,
-            entity=args.wandb_entity,
-            name=args.wandb_name,
-            config={
-                "batch_size": args.batch_size,
-                "hr_meta_file": args.hr_meta_file,
-                "lr_meta_file": args.lr_meta_file,
-                "phase": args.phase
-            }
-        )
+    use_wandb = False
+    if not args.no_wandb and WANDB_AVAILABLE:
+        try:
+            wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                name=args.wandb_name,
+                config={
+                    "batch_size": args.batch_size,
+                    "hr_meta_file": args.hr_meta_file,
+                    "lr_meta_file": args.lr_meta_file,
+                    "phase": args.phase
+                }
+            )
+            use_wandb = True
+            logging.info("Weights & Biases inicializado correctamente")
+        except Exception as e:
+            logging.error(f"Error al inicializar Weights & Biases: {e}")
+            logging.info("Continuando sin tracking de Weights & Biases")
     
     # Cargar y actualizar configuración
+    if not os.path.exists(args.config):
+        logging.error(f"Archivo de configuración {args.config} no encontrado")
+        return
+        
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
     
-    # Actualizar configuración
+    # Actualizar configuración con batch_size
     config["batch_size"] = args.batch_size
     
     # Guardar configuración actualizada
     with open(args.config, 'w') as f:
         yaml.dump(config, f, default_flow_style=False)
     
-    # Configurar directorios
-    for directory in [args.model_dir, args.log_dir]:
-        os.makedirs(directory, exist_ok=True)
-    
-    # Inicializar y entrenar modelo
-    print("Iniciando entrenamiento con archivos meta_info:")
-    print(f"HR meta_info: {args.hr_meta_file}")
-    print(f"LR meta_info: {args.lr_meta_file}")
-    
     # Cargar configuración
     sett = settings.Settings(args.config)
     
-    # Configurar strategy
+    # Configurar strategy para GPU
     strategy = utils.SingleDeviceStrategy()
     for physical_device in tf.config.experimental.list_physical_devices("GPU"):
         tf.config.experimental.set_memory_growth(physical_device, True)
@@ -119,36 +198,16 @@ def main():
     summary_writer_2 = tf.summary.create_file_writer(os.path.join(args.log_dir, "phase2"))
     
     # Inicializar modelos
+    logging.info("Inicializando modelos...")
     discriminator = model.VGGArch(batch_size=sett["batch_size"], num_features=64)
     generator = model.RRDBNet(out_channel=3)
-    generator.unsigned_call(tf.random.normal([1, 128, 128, 3]))  # Inicializar generador
     
-    # Definir la clase CustomTrainer que hereda de Trainer pero sobrescribe el método __init__
-    class CustomTrainer(train.Trainer):
-        def __init__(self, summary_writer, summary_writer_2, settings, model_dir="", 
-                     hr_meta_file=None, lr_meta_file=None, base_path="", strategy=None, use_wandb=False):
-            self.settings = settings
-            self.model_dir = model_dir
-            self.summary_writer = summary_writer
-            self.summary_writer_2 = summary_writer_2
-            self.strategy = strategy
-            self.use_wandb = use_wandb
-            self.batch_size = self.settings["batch_size"]
-            
-            # Cargar el dataset desde los archivos meta_info
-            print(f"Cargando dataset desde meta_info...")
-            self.dataset = iter(load_dataset_from_meta_info(
-                hr_meta_file=hr_meta_file,
-                lr_meta_file=lr_meta_file,
-                base_path=base_path,
-                batch_size=self.batch_size,  # Cambiado de 1000 a self.batch_size
-                shuffle=True,
-                lr_size=(128, 128),          # Añadir tamaño LR
-                hr_size=(512, 512)           # Añadir tamaño HR
-            ))
-            print("Dataset cargado correctamente.")
+    # Inicializar los parámetros del modelo
+    logging.info("Inicializando parámetros del generador...")
+    generator.unsigned_call(tf.random.normal([1, 128, 128, 3]))
     
     # Inicializar trainer personalizado
+    logging.info("Creando trainer customizado...")
     trainer = CustomTrainer(
         summary_writer=summary_writer_1,
         summary_writer_2=summary_writer_2,
@@ -158,40 +217,60 @@ def main():
         lr_meta_file=args.lr_meta_file,
         base_path=args.base_path,
         strategy=strategy,
-        use_wandb=not args.no_wandb
+        use_wandb=use_wandb
     )
     
     # Inicializar Stats
-    Stats = settings.Stats(os.path.join(sett.path, "stats.yaml"))
+    stats_file = os.path.join(os.path.dirname(args.config), "stats.yaml")
+    Stats = settings.Stats(stats_file)
     
     # Entrenar según las fases especificadas
     phases = args.phase.lower().split("_")
     if "phase1" in phases:
         logging.info("Iniciando fase 1 (PSNR)")
-        trainer.warmup_generator(generator)
-        Stats["train_step_1"] = True
+        try:
+            trainer.warmup_generator(generator)
+            Stats["train_step_1"] = True
+            logging.info("Fase 1 completada")
+        except Exception as e:
+            logging.error(f"Error en fase 1: {e}")
+            raise
     
     if "phase2" in phases:
         logging.info("Iniciando fase 2 (GAN)")
-        trainer.train_gan(generator, discriminator)
-        Stats["train_step_2"] = True
+        try:
+            trainer.train_gan(generator, discriminator)
+            Stats["train_step_2"] = True
+            logging.info("Fase 2 completada")
+        except Exception as e:
+            logging.error(f"Error en fase 2: {e}")
+            raise
     
     # Guardar modelo interpolado si se completaron ambas fases
     if Stats["train_step_1"] and Stats["train_step_2"]:
         logging.info("Guardando modelo interpolado")
-        interpolated_generator = utils.interpolate_generator(
-            lambda: model.RRDBNet(out_channel=3, first_call=False),
-            discriminator,
-            sett["interpolation_parameter"],
-            [720, 1080],
-            basepath=args.model_dir
-        )
-        tf.saved_model.save(interpolated_generator, os.path.join(args.model_dir, "esrgan"))
-        
-        # Guardar modelo en wandb
-        if not args.no_wandb:
-            wandb.save(os.path.join(args.model_dir, "esrgan"))
-            wandb.finish()
+        try:
+            interpolated_generator = utils.interpolate_generator(
+                lambda: model.RRDBNet(out_channel=3, first_call=False),
+                discriminator,
+                sett["interpolation_parameter"],
+                [720, 1080],
+                basepath=args.model_dir
+            )
+            tf.saved_model.save(
+                interpolated_generator, 
+                os.path.join(args.model_dir, "esrgan")
+            )
+            
+            # Guardar modelo en wandb
+            if use_wandb:
+                wandb.save(os.path.join(args.model_dir, "esrgan"))
+                wandb.finish()
+                
+            logging.info("Modelo guardado correctamente")
+        except Exception as e:
+            logging.error(f"Error al guardar modelo: {e}")
+            raise
     
     logging.info("Entrenamiento completado")
 

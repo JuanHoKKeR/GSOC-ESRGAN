@@ -8,6 +8,9 @@ services:
     volumes:
       - ./ESRGAN:/workspace
       - /media/adalab/A61ABBC31ABB8F35:/media/adalab/A61ABBC31ABB8F35
+      - ./logs:/workspace/logs
+      - ./model:/workspace/model
+      - ./cache:/workspace/cache
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - TF_FORCE_GPU_ALLOW_GROWTH=true
