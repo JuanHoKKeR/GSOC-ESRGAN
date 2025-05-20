@@ -98,6 +98,10 @@ class Trainer(object):
     total_steps = phase_args["num_steps"]
     metric = tf.keras.metrics.Mean()
     psnr_metric = tf.keras.metrics.Mean()
+    # Métricas adicionales
+    ssim_metric = tf.keras.metrics.Mean()
+    ms_ssim_metric = tf.keras.metrics.Mean()
+    mse_metric = tf.keras.metrics.Mean()
     # Generator Optimizer
     G_optimizer = tf.optimizers.Adam(
         learning_rate=phase_args["adam"]["initial_lr"],
@@ -126,6 +130,11 @@ class Trainer(object):
                   fake,
                   image_hr,
                   max_val=256.0)))
+      # Métricas adicionales
+      ssim_metric(utils.calculate_ssim(fake, image_hr))
+      ms_ssim_metric(utils.calculate_ms_ssim(fake, image_hr))
+      mse_metric(utils.calculate_mse(fake, image_hr))
+      
       # Eliminar la conversión a set que causa el error
       # gen_vars = list(set(generator.trainable_variables))
       gen_vars = generator.trainable_variables  # Usar directamente las variables
@@ -170,18 +179,29 @@ class Trainer(object):
         tf.summary.scalar(
             "warmup_loss", metric.result(), step=G_optimizer.iterations)
         tf.summary.scalar("mean_psnr", psnr_metric.result(), G_optimizer.iterations)
-
+        
+        # Registrar métricas adicionales
+        tf.summary.scalar("mean_ssim", ssim_metric.result(), G_optimizer.iterations)
+        tf.summary.scalar("mean_mse", mse_metric.result(), G_optimizer.iterations)
+        tf.summary.scalar("mean_ms_ssim", ms_ssim_metric.result(), G_optimizer.iterations)
+        
       # Registrar métricas en wandb si está habilitado
       if self.use_wandb and not num_steps % self.settings["print_step"]:
         # Convertir a numpy para evitar problemas con tensores de TensorFlow
         loss_value = float(metric.result().numpy())
         psnr_value = float(psnr_metric.result().numpy())
+        ssim_value = float(ssim_metric.result().numpy())
+        ms_ssim_value = float(ms_ssim_metric.result().numpy())
+        mse_value = float(mse_metric.result().numpy())
         current_lr = float(G_optimizer.learning_rate.numpy())
         
         # Registrar en wandb
         wandb.log({
             "phase1/loss": loss_value,
             "phase1/psnr": psnr_value,
+            "phase1/ssim": ssim_value,
+            "phase1/ms_ssim": ms_ssim_value,
+            "phase1/mse": mse_value,
             "phase1/learning_rate": current_lr,
             "phase1/step": int(num_steps.numpy()),
         })
@@ -211,10 +231,13 @@ class Trainer(object):
       if not num_steps % self.settings["print_step"]:
         logging.info(
             "[WARMUP] Step: {}\tGenerator Loss: {}"
-            "\tPSNR: {}\tTime Taken: {} sec".format(
+            "\tPSNR: {} \tSSIM: {} \tMS-SSIM: {} \tMSE: {} \tTime Taken: {} sec".format(
                 num_steps,
                 metric.result(),
                 psnr_metric.result(),
+                ssim_metric.result(),
+                ms_ssim_metric.result(),
+                mse_metric.result(),
                 time.time() -
                 start_time))
         if psnr_metric.result() > previous_loss:
@@ -276,6 +299,11 @@ class Trainer(object):
     gen_metric = tf.keras.metrics.Mean()
     disc_metric = tf.keras.metrics.Mean()
     psnr_metric = tf.keras.metrics.Mean()
+    
+    # Métricas adicionales
+    ssim_metric = tf.keras.metrics.Mean()
+    ms_ssim_metric = tf.keras.metrics.Mean()
+    mse_metric = tf.keras.metrics.Mean()
     logging.debug("Loading Perceptual Model")
     perceptual_loss = utils.PerceptualLoss(
         weights="imagenet",
@@ -313,6 +341,12 @@ class Trainer(object):
                     fake,
                     image_hr,
                     max_val=256.0)))
+        
+        # Métricas adicionales
+        ssim_metric(utils.calculate_ssim(fake, image_hr))
+        ms_ssim_metric(utils.calculate_ms_ssim(fake, image_hr))
+        mse_metric(utils.calculate_mse(fake, image_hr))
+        
       disc_grad = disc_tape.gradient(
           disc_loss, discriminator.trainable_variables)
       logging.debug("Calculated gradient for Discriminator")
@@ -377,6 +411,11 @@ class Trainer(object):
         tf.summary.scalar(
             "disc_loss", disc_metric.result(), step=D_optimizer.iterations)
         tf.summary.scalar("mean_psnr", psnr_metric.result(), step=D_optimizer.iterations)
+        
+        # Registrar métricas adicionales
+        tf.summary.scalar("mean_ssim", ssim_metric.result(), step=D_optimizer.iterations)
+        tf.summary.scalar("mean_mse", mse_metric.result(), step=D_optimizer.iterations)
+        tf.summary.scalar("mean_ms_ssim", ms_ssim_metric.result(), step=D_optimizer.iterations)
 
       # Registrar métricas en wandb si está habilitado
       if self.use_wandb and not num_step % self.settings["print_step"]:
@@ -384,6 +423,9 @@ class Trainer(object):
         gen_loss_value = float(gen_metric.result().numpy())
         disc_loss_value = float(disc_metric.result().numpy())
         psnr_value = float(psnr_metric.result().numpy())
+        ssim_value = float(ssim_metric.result().numpy())
+        ms_ssim_value = float(ms_ssim_metric.result().numpy())
+        mse_value = float(mse_metric.result().numpy())
         g_current_lr = float(G_optimizer.learning_rate.numpy())
         d_current_lr = float(D_optimizer.learning_rate.numpy())
         
@@ -392,6 +434,9 @@ class Trainer(object):
             "phase2/gen_loss": gen_loss_value,
             "phase2/disc_loss": disc_loss_value,
             "phase2/psnr": psnr_value,
+            "phase2/ssim": ssim_value,
+            "phase2/ms_ssim": ms_ssim_value,
+            "phase2/mse": mse_value,
             "phase2/G_learning_rate": g_current_lr,
             "phase2/D_learning_rate": d_current_lr,
             "phase2/step": int(num_step.numpy()),
@@ -424,11 +469,14 @@ class Trainer(object):
       if not num_step % self.settings["print_step"]:
         logging.info(
             "Step: {}\tGen Loss: {}\tDisc Loss: {}"
-            "\tPSNR: {}\tTime Taken: {} sec".format(
+            "\tPSNR: {} \tSSIM: {} \tMS-SSIM: {} \tMSE: {} \tTime Taken: {} sec".format(
                 num_step,
                 gen_metric.result(),
                 disc_metric.result(),
                 psnr_metric.result(),
+                ssim_metric.result(),
+                ms_ssim_metric.result(),
+                mse_metric.result(),
                 time.time() - start))
         # if psnr_metric.result() > last_psnr:
         last_psnr = psnr_metric.result()

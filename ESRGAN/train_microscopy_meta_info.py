@@ -5,6 +5,10 @@ from absl import logging
 import tensorflow as tf
 from lib.dataset import load_dataset_from_meta_info
 from lib import settings, train, model, utils
+from tensorflow.keras.mixed_precision import experimental as mixed_precision
+policy = mixed_precision.Policy('mixed_float16')
+mixed_precision.set_global_policy(policy)
+print("Mixed precision activada: ", mixed_precision.global_policy())
 
 try:
     import wandb

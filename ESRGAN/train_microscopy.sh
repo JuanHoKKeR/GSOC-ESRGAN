@@ -22,7 +22,7 @@ docker exec -it esrgan-container bash -c "cd /workspace && \
         --base_path '' \
         --model_dir '/workspace/model' \
         --log_dir '/workspace/logs' \
-        --batch_size 4 \
+        --batch_size 32 \
         --wandb_name 'microscopy-training' \
         --phase 'phase1_phase2' \
         -vv"

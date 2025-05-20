@@ -306,3 +306,22 @@ class RRDB(tf.keras.layers.Layer):
     out = self.RDB2(out)
     out = self.RDB3(out)
     return input_ + self.beta * out
+
+
+def calculate_ssim(y_true, y_pred):
+    """Calcula SSIM entre la imagen real y la generada"""
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
+    return tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=255.0))
+
+def calculate_ms_ssim(y_true, y_pred):
+    """Calcula MS-SSIM entre la imagen real y la generada"""
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
+    return tf.reduce_mean(tf.image.ssim_multiscale(y_true, y_pred, max_val=255.0))
+
+def calculate_mse(y_true, y_pred):
+    """Calcula MSE entre la imagen real y la generada"""
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
+    return tf.reduce_mean(tf.square(y_true - y_pred))
