@@ -2,6 +2,8 @@ from collections import OrderedDict
 from functools import partial
 import tensorflow as tf
 from lib import utils
+from tensorflow.keras.applications import DenseNet121
+
 
 """ Keras Models for ESRGAN
     Classes:
@@ -134,3 +136,48 @@ class VGGArch(tf.keras.Model):
     dense = self._lrelu(self._dense_1(flattened))
     out = self._dense_2(dense)
     return out
+
+class DenseNetDiscriminator(tf.keras.Model):
+    """Discriminador basado en DenseNet121 con pesos de KimiaNet"""
+    
+    def __init__(self, output_shape=1, use_bias=True, kimianet_weights_path=None):
+        super(DenseNetDiscriminator, self).__init__()
+        
+        # Cargar DenseNet121 sin la capa final de clasificación
+        self.base_model = DenseNet121(include_top=False, weights=None, input_shape=(None, None, 3))
+        
+        # Cargar pesos de KimiaNet si se proporciona la ruta
+        if kimianet_weights_path:
+            self.base_model.load_weights(kimianet_weights_path)
+        
+        # Congelar algunas capas base
+        for layer in self.base_model.layers[:100]:
+          layer.trainable = False
+        
+        # Global Average Pooling para manejar tamaños variables
+        self.global_pool = tf.keras.layers.GlobalAveragePooling2D()
+        
+        # Capas densas para la clasificación final
+        self.dense1 = tf.keras.layers.Dense(256)
+        self.dropout = tf.keras.layers.Dropout(0.5)
+        self.dense2 = tf.keras.layers.Dense(output_shape)
+        self.leaky_relu = tf.keras.layers.LeakyReLU(alpha=0.2)
+        
+    def call(self, inputs):
+        return self.unsigned_call(inputs)
+        
+    def unsigned_call(self, input_):
+        # Procesar mediante DenseNet121/KimiaNet
+        features = self.base_model(input_)
+        
+        # Global pooling para manejar diferentes resoluciones
+        pooled = self.global_pool(features)
+        
+        # Capas finales de clasificación
+        x = self.leaky_relu(self.dense1(pooled))
+        x = self.dropout(x)
+        output = self.dense2(x)
+        
+        return output
+
+

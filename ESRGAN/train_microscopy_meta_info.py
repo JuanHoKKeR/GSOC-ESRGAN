@@ -199,7 +199,7 @@ def main():
     
     # Inicializar modelos
     logging.info("Inicializando modelos...")
-    discriminator = model.VGGArch(batch_size=sett["batch_size"], num_features=64)
+    discriminator = model.DenseNetDiscriminator(kimianet_weights_path="/model-kimianet/KimiaNetKerasWeights.h5")
     generator = model.RRDBNet(out_channel=3)
     
     # Inicializar los parámetros del modelo

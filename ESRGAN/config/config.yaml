@@ -1,6 +1,6 @@
 RDB:
   residual_scale_beta: 0.2
-batch_size: 4
+batch_size: 32  # Aumentado de 4 a 32 para la RTX 4090
 checkpoint_path:
   phase_1: checkpoints/phase_1
   phase_2: checkpoints/phase_2
@@ -9,24 +9,23 @@ dataset:
   name: Microscopy
   scale_method: bicubic
 interpolation_parameter: 0.8
-print_step: 500
+print_step: 100  # Cambio a 100 para ver progreso más frecuente
 train_combined:
   adam:
     beta_1: 0.9
     beta_2: 0.999
     decay:
       factor: 0.5
-      step:
-      - 5000
+      step:  # Reducidos para converger más rápido con batch mayor
+      - 2000
+      - 6000
+      - 10000
       - 15000
-      - 30000
-      - 60000
-      - 100000
-      - 150000
-    initial_lr: 1.0e-05
+      - 25000
+    initial_lr: 2.0e-05  # Aumentado un poco para el batch mayor
   eta: 0.01
   lambda: 0.005
-  num_steps: 200000
+  num_steps: 50000  # Reducido ya que con batch mayor se necesitan menos pasos
   perceptual_loss_type: L1
 train_psnr:
   adam:
@@ -34,6 +33,6 @@ train_psnr:
     beta_2: 0.999
     decay:
       factor: 0.5
-      step: 100000
-    initial_lr: 0.0001
-  num_steps: 300000
+      step: 30000
+    initial_lr: 0.0002  # Aumentado para batch mayor
+  num_steps: 100000  # Reducido para completar en menos tiempo
