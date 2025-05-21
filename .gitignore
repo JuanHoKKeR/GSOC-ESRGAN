@@ -23,6 +23,7 @@ bazel-*
 
 ESRGAN/wandb
 ESRGAN/MicroscopyImages
+ESRGAN/Microscopy
 ESRGAN/datasets/
 ESRGAN/model
 ESRGAN/datasets/meta_info_64.txt
