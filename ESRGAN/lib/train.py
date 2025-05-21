@@ -22,19 +22,26 @@ class Trainer(object):
           model_dir="",
           data_dir=None,
           manual=False,
-          strategy=None):
+          strategy=None,
+          use_wandb=False):  # Añadido parámetro para usar wandb
     """ Setup the values and variables for Training.
         Args:
           summary_writer: tf.summary.SummaryWriter object to write summaries for Tensorboard.
+          summary_writer_2: tf.summary.SummaryWriter object for phase 2 summaries.
           settings: settings object for fetching data from config files.
+          model_dir (default: ""): path where the model checkpoints should be stored.
           data_dir (default: None): path where the data downloaded should be stored / accessed.
           manual (default: False): boolean to represent if data_dir is a manual dir.
+          strategy (default: None): tf.distribute.Strategy object for distributed training.
+          use_wandb (default: False): boolean to indicate if wandb logging is enabled.
     """
     self.settings = settings
     self.model_dir = model_dir
     self.summary_writer = summary_writer
     self.summary_writer_2 = summary_writer_2
     self.strategy = strategy
+    self.use_wandb = use_wandb and WANDB_AVAILABLE  # Inicializar uso de wandb
+    
     dataset_args = self.settings["dataset"]
     augment_dataset = dataset.augment_image(saturation=None)
     self.batch_size = self.settings["batch_size"]
@@ -44,40 +51,54 @@ class Trainer(object):
     lr_size = tf.cast(hr_size, tf.float32) * \
         tf.convert_to_tensor([1 / 4, 1 / 4, 1], tf.float32)
     lr_size = tf.cast(lr_size, tf.int32)
+    
+    # Configurar el dataset según la estrategia
     if isinstance(strategy, tf.distribute.Strategy):
       self.dataset = (dataset.load_tfrecord_dataset(
           tfrecord_path=data_dir,
           lr_size=lr_size,
-          hr_size=hr_size)
+          hr_size=hr_size,
+          batch_size=self.batch_size)  # Pasar batch_size para usar con la función actualizada
           .repeat()
-          .map(augment_dataset)
-          .batch(self.batch_size, drop_remainder=True))
-      self.dataset = iter(
-          strategy.experimental_distribute_dataset(
-              self.dataset))
+          .map(augment_dataset, num_parallel_calls=tf.data.AUTOTUNE))  # Usar AUTOTUNE para mejor rendimiento
+          
+      # En TF 2.11, preferir distribute_dataset en lugar de experimental_distribute_dataset
+      if hasattr(strategy, 'distribute_dataset'):
+          self.dataset = strategy.distribute_dataset(self.dataset)
+      else:
+          self.dataset = strategy.experimental_distribute_dataset(self.dataset)
+          
+      self.dataset = iter(self.dataset)
     else:
+      # Inicializar self.dataset
       if not manual:
-        self.dataset.repeat()
-        self.dataset = iter(dataset.load_dataset(
-            dataset_args["name"],
-            dataset.scale_down(
+        scale_fn = dataset.scale_down(
                 method=dataset_args["scale_method"],
-                dimension=dataset_args["hr_dimension"]),
+                dimension=dataset_args["hr_dimension"])
+        
+        self.dataset = dataset.load_dataset(
+            dataset_args["name"],
+            scale_fn,
             batch_size=settings["batch_size"],
             data_dir=data_dir,
             augment=True,
-            shuffle=True))
+            shuffle=True)
+        self.dataset = self.dataset.repeat()
+        self.dataset = iter(self.dataset)
       else:
-        self.dataset.repeat()
-        self.dataset = iter(dataset.load_dataset_directory(
+        scale_fn = dataset.scale_down(
+                method=dataset_args["scale_method"],
+                dimension=dataset_args["hr_dimension"])
+                
+        self.dataset = dataset.load_dataset_directory(
             dataset_args["name"],
             data_dir,
-            dataset.scale_down(
-                method=dataset_args["scale_method"],
-                dimension=dataset_args["hr_dimension"]),
+            scale_fn,
             batch_size=settings["batch_size"],
             augment=True,
-            shuffle=True))
+            shuffle=True)
+        self.dataset = self.dataset.repeat()
+        self.dataset = iter(self.dataset)
 
   def warmup_generator(self, generator):
     """ Training on L1 Loss to warmup the Generator.
@@ -103,7 +124,7 @@ class Trainer(object):
     ms_ssim_metric = tf.keras.metrics.Mean()
     mse_metric = tf.keras.metrics.Mean()
     # Generator Optimizer
-    G_optimizer = tf.optimizers.Adam(
+    G_optimizer = tf.keras.optimizers.Adam(
         learning_rate=phase_args["adam"]["initial_lr"],
         beta_1=phase_args["adam"]["beta_1"],
         beta_2=phase_args["adam"]["beta_2"])
@@ -122,128 +143,181 @@ class Trainer(object):
       image_hr = kwargs["image_hr"]
       logging.debug("Starting Distributed Step")
       with tf.GradientTape() as tape:
-        fake = generator.unsigned_call(image_lr)
+        # Usar generator.call con training=True para asegurar que el modelo esté en modo entrenamiento
+        fake = generator(image_lr, training=True)
         loss = utils.pixel_loss(image_hr, fake) * (1.0 / self.batch_size)
-      psnr_metric(
+      
+      # Calcular métricas
+      psnr_metric.update_state(
           tf.reduce_mean(
               tf.image.psnr(
                   fake,
                   image_hr,
-                  max_val=256.0)))
-      # Métricas adicionales
-      ssim_metric(utils.calculate_ssim(fake, image_hr))
-      ms_ssim_metric(utils.calculate_ms_ssim(fake, image_hr))
-      mse_metric(utils.calculate_mse(fake, image_hr))
+                  max_val=255.0)))  # Usar 255.0 en lugar de 256.0 para max_val
       
-      # Eliminar la conversión a set que causa el error
-      # gen_vars = list(set(generator.trainable_variables))
-      gen_vars = generator.trainable_variables  # Usar directamente las variables
+      # Actualizar métricas adicionales
+      ssim_metric.update_state(utils.calculate_ssim(fake, image_hr))
+      ms_ssim_metric.update_state(utils.calculate_ms_ssim(fake, image_hr))
+      mse_metric.update_state(utils.calculate_mse(fake, image_hr))
+      
+      # Usar variables trainable directamente sin convertir a set
+      gen_vars = generator.trainable_variables
       gradient = tape.gradient(loss, gen_vars)
-      G_optimizer.apply_gradients(
-          zip(gradient, gen_vars))
-      mean_loss = metric(loss)
+      G_optimizer.apply_gradients(zip(gradient, gen_vars))
+      
+      # Actualizar métrica principal
+      metric.update_state(loss)
+      
       logging.debug("Ending Distributed Step")
       return tf.cast(G_optimizer.iterations, tf.float32)
 
     @tf.function
     def train_step(image_lr, image_hr):
-        distributed_metric = self.strategy.run(
-            _step_fn, args=[], kwargs={"image_lr": image_lr, "image_hr": image_hr})
-        mean_metric = self.strategy.reduce(
-            tf.distribute.ReduceOp.MEAN, distributed_metric, axis=None)
-        return mean_metric
+        # Uso de run en Strategy para ejecutar el paso de entrenamiento
+        if isinstance(self.strategy, tf.distribute.Strategy):
+            distributed_metric = self.strategy.run(
+                _step_fn, kwargs={"image_lr": image_lr, "image_hr": image_hr})
+            mean_metric = self.strategy.reduce(
+                tf.distribute.ReduceOp.MEAN, distributed_metric, axis=None)
+            return mean_metric
+        else:
+            # Si no hay estrategia, ejecutar directamente
+            return _step_fn(image_lr=image_lr, image_hr=image_hr)
 
     while True:
       image_lr, image_hr = next(self.dataset)
       num_steps = train_step(image_lr, image_hr)
-
-      if num_steps >= total_steps:
+      
+      # Verificar si hemos alcanzado el número total de pasos
+      if isinstance(num_steps, tf.Tensor):
+          current_step = int(num_steps.numpy())
+      else:
+          current_step = int(num_steps)
+          
+      if current_step >= total_steps:
         return
+      
+      # Verificar el estado del checkpoint
       if status:
-        status.assert_consumed()
-        logging.info(
-            "consumed checkpoint for phase_1 successfully")
-        status = None
+        try:
+            status.assert_consumed()
+            logging.info("Consumed checkpoint for phase_1 successfully")
+            status = None
+        except Exception as e:
+            logging.warning(f"Error al consumir checkpoint: {e}")
+            status = None
 
-      if not num_steps % decay_step:  # Decay Learning Rate
+      # Ajustar el learning rate según el decay
+      if current_step > 0 and current_step % decay_step == 0:
+        # Acceder correctamente al learning rate
+        current_lr = G_optimizer.learning_rate
+        if hasattr(current_lr, 'numpy'):
+            # Para TensorFlow 2.11, learning_rate puede ser un Tensor
+            current_lr_value = float(current_lr.numpy())
+        else:
+            # Para compatibilidad con versiones anteriores, podría ser un valor escalar
+            current_lr_value = float(current_lr)
+            
+        logging.debug(f"Current Learning Rate: {current_lr_value}")
+        
+        # Asignar el nuevo learning rate
+        G_optimizer.learning_rate.assign(current_lr * decay_factor)
+        
         logging.debug(
-            "Learning Rate: %s" %
-            G_optimizer.learning_rate.numpy)
-        G_optimizer.learning_rate.assign(
-            G_optimizer.learning_rate * decay_factor)
-        logging.debug(
-            "Decayed Learning Rate by %f."
-            "Current Learning Rate %s" % (
-                decay_factor, G_optimizer.learning_rate))
+            f"Decayed Learning Rate by {decay_factor}. "
+            f"New Learning Rate: {float(G_optimizer.learning_rate.numpy())}")
+            
+      # Escribir métricas en TensorBoard
       with self.summary_writer.as_default():
         tf.summary.scalar(
-            "warmup_loss", metric.result(), step=G_optimizer.iterations)
-        tf.summary.scalar("mean_psnr", psnr_metric.result(), G_optimizer.iterations)
+            "warmup_loss", metric.result(), step=current_step)
+        tf.summary.scalar("mean_psnr", psnr_metric.result(), step=current_step)
         
         # Registrar métricas adicionales
-        tf.summary.scalar("mean_ssim", ssim_metric.result(), G_optimizer.iterations)
-        tf.summary.scalar("mean_mse", mse_metric.result(), G_optimizer.iterations)
-        tf.summary.scalar("mean_ms_ssim", ms_ssim_metric.result(), G_optimizer.iterations)
+        tf.summary.scalar("mean_ssim", ssim_metric.result(), step=current_step)
+        tf.summary.scalar("mean_mse", mse_metric.result(), step=current_step)
+        tf.summary.scalar("mean_ms_ssim", ms_ssim_metric.result(), step=current_step)
         
       # Registrar métricas en wandb si está habilitado
-      if self.use_wandb and not num_steps % self.settings["print_step"]:
-        # Convertir a numpy para evitar problemas con tensores de TensorFlow
-        loss_value = float(metric.result().numpy())
-        psnr_value = float(psnr_metric.result().numpy())
-        ssim_value = float(ssim_metric.result().numpy())
-        ms_ssim_value = float(ms_ssim_metric.result().numpy())
-        mse_value = float(mse_metric.result().numpy())
-        current_lr = float(G_optimizer.learning_rate.numpy())
-        
-        # Registrar en wandb
-        wandb.log({
-            "phase1/loss": loss_value,
-            "phase1/psnr": psnr_value,
-            "phase1/ssim": ssim_value,
-            "phase1/ms_ssim": ms_ssim_value,
-            "phase1/mse": mse_value,
-            "phase1/learning_rate": current_lr,
-            "phase1/step": int(num_steps.numpy()),
-        })
-        
-        # Opcional: Añadir imagen generada como ejemplo cada cierto número de pasos
-        if not num_steps % (self.settings["print_step"] * 10):
-            # Selecciona un ejemplo de la batch
-            sample_lr = image_lr[0]
-            sample_hr = image_hr[0]
-            sample_fake = generator.unsigned_call(tf.expand_dims(sample_lr, 0))[0]
+      if self.use_wandb and current_step % self.settings["print_step"] == 0:
+        # Convertir a valores Python para evitar problemas con tensores
+        try:
+            loss_value = float(metric.result().numpy())
+            psnr_value = float(psnr_metric.result().numpy())
+            ssim_value = float(ssim_metric.result().numpy())
+            ms_ssim_value = float(ms_ssim_metric.result().numpy())
+            mse_value = float(mse_metric.result().numpy())
+            current_lr = float(G_optimizer.learning_rate.numpy())
             
-            # Convertir a formato correcto para wandb
-            sample_lr = tf.cast(tf.clip_by_value(sample_lr, 0, 255), tf.uint8).numpy()
-            sample_hr = tf.cast(tf.clip_by_value(sample_hr, 0, 255), tf.uint8).numpy()
-            sample_fake = tf.cast(tf.clip_by_value(sample_fake, 0, 255), tf.uint8).numpy()
-            
-            # Registrar imágenes
+            # Registrar en wandb
             wandb.log({
-                "phase1/samples": [
-                    wandb.Image(sample_lr, caption="Low Resolution"),
-                    wandb.Image(sample_fake, caption="Generated"),
-                    wandb.Image(sample_hr, caption="High Resolution")
-                ],
-                "phase1/step": int(num_steps.numpy()),
-            })      
+                "phase1/loss": loss_value,
+                "phase1/psnr": psnr_value,
+                "phase1/ssim": ssim_value,
+                "phase1/ms_ssim": ms_ssim_value,
+                "phase1/mse": mse_value,
+                "phase1/learning_rate": current_lr,
+                "phase1/step": current_step,
+            })
+            
+            # Registrar imágenes cada cierto número de pasos
+            if current_step % (self.settings["print_step"] * 10) == 0:
+                # Seleccionar un ejemplo del batch para visualización
+                if isinstance(image_lr, tf.distribute.DistributedValues):
+                    # Si estamos en entrenamiento distribuido, obtener el primer valor
+                    sample_lr = image_lr.values[0][0]
+                    sample_hr = image_hr.values[0][0]
+                else:
+                    sample_lr = image_lr[0]
+                    sample_hr = image_hr[0]
+                
+                # Generar imagen usando el generador
+                sample_fake = generator(tf.expand_dims(sample_lr, 0), training=False)[0]
+                
+                # Convertir a formato adecuado para wandb
+                sample_lr = tf.cast(tf.clip_by_value(sample_lr, 0, 255), tf.uint8).numpy()
+                sample_hr = tf.cast(tf.clip_by_value(sample_hr, 0, 255), tf.uint8).numpy()
+                sample_fake = tf.cast(tf.clip_by_value(sample_fake, 0, 255), tf.uint8).numpy()
+                
+                # Registrar imágenes
+                wandb.log({
+                    "phase1/samples": [
+                        wandb.Image(sample_lr, caption="Low Resolution"),
+                        wandb.Image(sample_fake, caption="Generated"),
+                        wandb.Image(sample_hr, caption="High Resolution")
+                    ],
+                    "phase1/step": current_step,
+                })
+        except Exception as e:
+            logging.warning(f"Error al registrar métricas en wandb: {e}")
 
-      if not num_steps % self.settings["print_step"]:
+      # Imprimir información cada cierto número de pasos
+      if current_step % self.settings["print_step"] == 0:
         logging.info(
-            "[WARMUP] Step: {}\tGenerator Loss: {}"
-            "\tPSNR: {} \tSSIM: {} \tMS-SSIM: {} \tMSE: {} \tTime Taken: {} sec".format(
-                num_steps,
-                metric.result(),
-                psnr_metric.result(),
-                ssim_metric.result(),
-                ms_ssim_metric.result(),
-                mse_metric.result(),
-                time.time() -
-                start_time))
+            "[WARMUP] Step: {}\tGenerator Loss: {:.6f}"
+            "\tPSNR: {:.4f} \tSSIM: {:.4f} \tMS-SSIM: {:.4f} \tMSE: {:.6f} \tTime Taken: {:.2f} sec".format(
+                current_step,
+                float(metric.result().numpy()),
+                float(psnr_metric.result().numpy()),
+                float(ssim_metric.result().numpy()),
+                float(ms_ssim_metric.result().numpy()),
+                float(mse_metric.result().numpy()),
+                time.time() - start_time))
+                
+        # Guardar checkpoint si el PSNR mejora
         if psnr_metric.result() > previous_loss:
           utils.save_checkpoint(checkpoint, "phase_1", self.model_dir)
-        previous_loss = psnr_metric.result()
+          previous_loss = psnr_metric.result()
+          
+        # Reiniciar el temporizador
         start_time = time.time()
+        
+        # Reiniciar las métricas para el próximo conjunto de pasos
+        metric.reset_states()
+        psnr_metric.reset_states()
+        ssim_metric.reset_states()
+        ms_ssim_metric.reset_states()
+        mse_metric.reset_states()
 
   def train_gan(self, generator, discriminator):
     """ Implements Training routine for ESRGAN
@@ -254,13 +328,13 @@ class Trainer(object):
     phase_args = self.settings["train_combined"]
     decay_args = phase_args["adam"]["decay"]
     decay_factor = decay_args["factor"]
-    decay_steps = decay_args["step"]
+    decay_steps = decay_args["step"].copy()  # Crear una copia para evitar modificar el original
     lambda_ = phase_args["lambda"]
     hr_dimension = self.settings["dataset"]["hr_dimension"]
     eta = phase_args["eta"]
     total_steps = phase_args["num_steps"]
     optimizer = partial(
-        tf.optimizers.Adam,
+        tf.keras.optimizers.Adam,
         learning_rate=phase_args["adam"]["initial_lr"],
         beta_1=phase_args["adam"]["beta_1"],
         beta_2=phase_args["adam"]["beta_2"])
@@ -280,22 +354,27 @@ class Trainer(object):
         G_optimizer=G_optimizer,
         D=discriminator,
         D_optimizer=D_optimizer)
-    if not tf.io.gfile.exists(
-        os.path.join(
-            self.model_dir,
-            self.settings["checkpoint_path"]["phase_2"],
-            "checkpoint")):
-      hot_start = tf.train.Checkpoint(
-          G=generator,
-          G_optimizer=G_optimizer)
-      status = utils.load_checkpoint(hot_start, "phase_1", self.model_dir)
-      # consuming variable from checkpoint
-      G_optimizer.learning_rate.assign(phase_args["adam"]["initial_lr"])
+        
+    # Verificar si existe un checkpoint de fase 2
+    checkpoint_dir = os.path.join(
+        self.model_dir,
+        self.settings["checkpoint_path"]["phase_2"])
+    
+    if not tf.io.gfile.exists(os.path.join(checkpoint_dir, "checkpoint")):
+        # Si no existe checkpoint de fase 2, cargar desde fase 1
+        hot_start = tf.train.Checkpoint(
+            G=generator,
+            G_optimizer=G_optimizer)
+        status = utils.load_checkpoint(hot_start, "phase_1", self.model_dir)
+        # Resetear el learning rate
+        G_optimizer.learning_rate.assign(phase_args["adam"]["initial_lr"])
     else:
-      status = utils.load_checkpoint(checkpoint, "phase_2", self.model_dir)
+        # Si existe, cargar desde fase 2
+        status = utils.load_checkpoint(checkpoint, "phase_2", self.model_dir)
 
-    logging.debug("phase status object: {}".format(status))
+    logging.debug("Phase 2 status object: {}".format(status))
 
+    # Inicializar métricas
     gen_metric = tf.keras.metrics.Mean()
     disc_metric = tf.keras.metrics.Mean()
     psnr_metric = tf.keras.metrics.Mean()
@@ -304,181 +383,255 @@ class Trainer(object):
     ssim_metric = tf.keras.metrics.Mean()
     ms_ssim_metric = tf.keras.metrics.Mean()
     mse_metric = tf.keras.metrics.Mean()
+    
     logging.debug("Loading Perceptual Model")
     perceptual_loss = utils.PerceptualLoss(
         weights="imagenet",
         input_shape=[hr_dimension, hr_dimension, 3],
         loss_type=phase_args["perceptual_loss_type"])
-    logging.debug("Loaded Model")
+    logging.debug("Loaded Perceptual Model")
+    
     def _step_fn(**kwargs):
       image_lr = kwargs["image_lr"]
       image_hr = kwargs["image_hr"]
       logging.debug("Starting Distributed Step")
+      
       with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
-        fake = generator.unsigned_call(image_lr)
-        logging.debug("Fetched Generator Fake")
-        fake = utils.preprocess_input(fake)
-        image_lr = utils.preprocess_input(image_lr)
-        image_hr = utils.preprocess_input(image_hr)
-        percep_loss = tf.reduce_mean(perceptual_loss(image_hr, fake))
+        # Usar call con training=True
+        fake = generator(image_lr, training=True)
+        logging.debug("Generated fake image")
+        
+        # Pre-procesar imágenes si es necesario
+        fake_processed = utils.preprocess_input(fake)
+        hr_processed = utils.preprocess_input(image_hr)
+        
+        # Calcular pérdidas
+        percep_loss = tf.reduce_mean(perceptual_loss(hr_processed, fake_processed))
         logging.debug("Calculated Perceptual Loss")
-        l1_loss = utils.pixel_loss(image_hr, fake)
+        
+        l1_loss = utils.pixel_loss(hr_processed, fake_processed)
         logging.debug("Calculated Pixel Loss")
-        loss_RaG = ra_gen(image_hr, fake)
-        logging.debug("Calculated Relativistic"
-                      "Averate (RA) Loss for Generator")
-        disc_loss = ra_disc(image_hr, fake)
+        
+        # Calcular pérdidas relativistas
+        loss_RaG = ra_gen(hr_processed, fake_processed)
+        logging.debug("Calculated Relativistic Average Loss for Generator")
+        
+        disc_loss = ra_disc(hr_processed, fake_processed)
         logging.debug("Calculated RA Loss Discriminator")
+        
+        # Pérdida combinada del generador
         gen_loss = percep_loss + lambda_ * loss_RaG + eta * l1_loss
         logging.debug("Calculated Generator Loss")
-        disc_metric(disc_loss)
-        gen_metric(gen_loss)
+        
+        # Escalar pérdidas por tamaño de batch
         gen_loss = gen_loss * (1.0 / self.batch_size)
         disc_loss = disc_loss * (1.0 / self.batch_size)
-        psnr_metric(
+        
+        # Actualizar métricas
+        disc_metric.update_state(disc_loss)
+        gen_metric.update_state(gen_loss)
+        
+        # Calcular PSNR y otras métricas
+        psnr_metric.update_state(
             tf.reduce_mean(
                 tf.image.psnr(
-                    fake,
-                    image_hr,
-                    max_val=256.0)))
+                    fake_processed,
+                    hr_processed,
+                    max_val=255.0)))  # Usar 255.0 para max_val
         
-        # Métricas adicionales
-        ssim_metric(utils.calculate_ssim(fake, image_hr))
-        ms_ssim_metric(utils.calculate_ms_ssim(fake, image_hr))
-        mse_metric(utils.calculate_mse(fake, image_hr))
+        # Actualizar métricas adicionales
+        ssim_metric.update_state(utils.calculate_ssim(fake_processed, hr_processed))
+        ms_ssim_metric.update_state(utils.calculate_ms_ssim(fake_processed, hr_processed))
+        mse_metric.update_state(utils.calculate_mse(fake_processed, hr_processed))
         
-      disc_grad = disc_tape.gradient(
-          disc_loss, discriminator.trainable_variables)
+      # Calcular y aplicar gradientes del discriminador
+      disc_vars = discriminator.trainable_variables
+      disc_grad = disc_tape.gradient(disc_loss, disc_vars)
       logging.debug("Calculated gradient for Discriminator")
-      D_optimizer.apply_gradients(
-          zip(disc_grad, discriminator.trainable_variables))
+      D_optimizer.apply_gradients(zip(disc_grad, disc_vars))
       logging.debug("Applied gradients to Discriminator")
-      gen_grad = gen_tape.gradient(
-          gen_loss, generator.trainable_variables)
+      
+      # Calcular y aplicar gradientes del generador
+      gen_vars = generator.trainable_variables
+      gen_grad = gen_tape.gradient(gen_loss, gen_vars)
       logging.debug("Calculated gradient for Generator")
-      G_optimizer.apply_gradients(
-          zip(gen_grad, generator.trainable_variables))
+      G_optimizer.apply_gradients(zip(gen_grad, gen_vars))
       logging.debug("Applied gradients to Generator")
 
       return tf.cast(D_optimizer.iterations, tf.float32)
 
     @tf.function
     def train_step(image_lr, image_hr):
-        distributed_iterations = self.strategy.run(
-            _step_fn, args=[], kwargs={"image_lr": image_lr, "image_hr": image_hr})
-        num_steps = self.strategy.reduce(
-            tf.distribute.ReduceOp.MEAN,
-            distributed_iterations,
-            axis=None)
-        return num_steps
+        # Usar la estrategia para ejecutar el paso de entrenamiento
+        if isinstance(self.strategy, tf.distribute.Strategy):
+            distributed_iterations = self.strategy.run(
+                _step_fn, kwargs={"image_lr": image_lr, "image_hr": image_hr})
+            num_steps = self.strategy.reduce(
+                tf.distribute.ReduceOp.MEAN,
+                distributed_iterations,
+                axis=None)
+            return num_steps
+        else:
+            # Si no hay estrategia, ejecutar directamente
+            return _step_fn(image_lr=image_lr, image_hr=image_hr)
+            
     start = time.time()
     last_psnr = 0
+    
     while True:
       image_lr, image_hr = next(self.dataset)
       num_step = train_step(image_lr, image_hr)
-      if num_step >= total_steps:
+      
+      # Convertir a valor Python si es un tensor
+      if isinstance(num_step, tf.Tensor):
+          current_step = int(num_step.numpy())
+      else:
+          current_step = int(num_step)
+          
+      # Verificar si hemos alcanzado el número total de pasos
+      if current_step >= total_steps:
         return
+        
+      # Verificar el estado del checkpoint
       if status:
-        status.assert_consumed()
-        logging.info("consumed checkpoint successfully!")
-        status = None
-      # Decaying Learning Rate
-      for _step in decay_steps.copy():
-        if num_step >= _step:
+        try:
+            status.assert_consumed()
+            logging.info("Consumed checkpoint successfully!")
+            status = None
+        except Exception as e:
+            logging.warning(f"Error al consumir checkpoint: {e}")
+            status = None
+            
+      # Ajustar learning rate según decay_steps
+      if decay_steps and current_step >= decay_steps[0]:
+          # Eliminar el primer elemento de decay_steps
           decay_steps.pop(0)
-          g_current_lr = self.strategy.reduce(
-              tf.distribute.ReduceOp.MEAN,
-              G_optimizer.learning_rate, axis=None)
-
-          d_current_lr = self.strategy.reduce(
-              tf.distribute.ReduceOp.MEAN,
-              D_optimizer.learning_rate, axis=None)
-
+          
+          # Obtener y mostrar los learning rates actuales
+          g_current_lr = G_optimizer.learning_rate
+          d_current_lr = D_optimizer.learning_rate
+          
+          if isinstance(self.strategy, tf.distribute.Strategy):
+              # Para entrenamiento distribuido
+              g_current_lr = self.strategy.reduce(
+                  tf.distribute.ReduceOp.MEAN,
+                  g_current_lr, axis=None)
+              d_current_lr = self.strategy.reduce(
+                  tf.distribute.ReduceOp.MEAN,
+                  d_current_lr, axis=None)
+          
           logging.debug(
-              "Current LR: G = %s, D = %s" %
-              (g_current_lr, d_current_lr))
+              f"Current LR: G = {float(g_current_lr.numpy())}, D = {float(d_current_lr.numpy())}")
           logging.debug(
-              "[Phase 2] Decayed Learing Rate by %f." % decay_factor)
-          G_optimizer.learning_rate.assign(
-              G_optimizer.learning_rate * decay_factor)
-          D_optimizer.learning_rate.assign(
-              D_optimizer.learning_rate * decay_factor)
+              f"[Phase 2] Decayed Learning Rate by {decay_factor}")
+              
+          # Aplicar el decay a ambos optimizadores
+          G_optimizer.learning_rate.assign(g_current_lr * decay_factor)
+          D_optimizer.learning_rate.assign(d_current_lr * decay_factor)
 
-      # Writing Summary
+      # Escribir métricas en TensorBoard
       with self.summary_writer_2.as_default():
         tf.summary.scalar(
-            "gen_loss", gen_metric.result(), step=D_optimizer.iterations)
+            "gen_loss", gen_metric.result(), step=current_step)
         tf.summary.scalar(
-            "disc_loss", disc_metric.result(), step=D_optimizer.iterations)
-        tf.summary.scalar("mean_psnr", psnr_metric.result(), step=D_optimizer.iterations)
+            "disc_loss", disc_metric.result(), step=current_step)
+        tf.summary.scalar("mean_psnr", psnr_metric.result(), step=current_step)
         
         # Registrar métricas adicionales
-        tf.summary.scalar("mean_ssim", ssim_metric.result(), step=D_optimizer.iterations)
-        tf.summary.scalar("mean_mse", mse_metric.result(), step=D_optimizer.iterations)
-        tf.summary.scalar("mean_ms_ssim", ms_ssim_metric.result(), step=D_optimizer.iterations)
+        tf.summary.scalar("mean_ssim", ssim_metric.result(), step=current_step)
+        tf.summary.scalar("mean_mse", mse_metric.result(), step=current_step)
+        tf.summary.scalar("mean_ms_ssim", ms_ssim_metric.result(), step=current_step)
 
       # Registrar métricas en wandb si está habilitado
-      if self.use_wandb and not num_step % self.settings["print_step"]:
-        # Convertir a numpy para evitar problemas con tensores de TensorFlow
-        gen_loss_value = float(gen_metric.result().numpy())
-        disc_loss_value = float(disc_metric.result().numpy())
-        psnr_value = float(psnr_metric.result().numpy())
-        ssim_value = float(ssim_metric.result().numpy())
-        ms_ssim_value = float(ms_ssim_metric.result().numpy())
-        mse_value = float(mse_metric.result().numpy())
-        g_current_lr = float(G_optimizer.learning_rate.numpy())
-        d_current_lr = float(D_optimizer.learning_rate.numpy())
-        
-        # Registrar en wandb
-        wandb.log({
-            "phase2/gen_loss": gen_loss_value,
-            "phase2/disc_loss": disc_loss_value,
-            "phase2/psnr": psnr_value,
-            "phase2/ssim": ssim_value,
-            "phase2/ms_ssim": ms_ssim_value,
-            "phase2/mse": mse_value,
-            "phase2/G_learning_rate": g_current_lr,
-            "phase2/D_learning_rate": d_current_lr,
-            "phase2/step": int(num_step.numpy()),
-        })
-        
-        # Opcional: Añadir imagen generada como ejemplo cada cierto número de pasos
-        if not num_step % (self.settings["print_step"] * 10):
-            # Selecciona un ejemplo de la batch
-            sample_lr = image_lr[0]
-            sample_hr = image_hr[0]
-            sample_fake = generator.unsigned_call(tf.expand_dims(sample_lr, 0))[0]
+      if self.use_wandb and current_step % self.settings["print_step"] == 0:
+        try:
+            # Convertir a valores Python para evitar problemas con tensores
+            gen_loss_value = float(gen_metric.result().numpy())
+            disc_loss_value = float(disc_metric.result().numpy())
+            psnr_value = float(psnr_metric.result().numpy())
+            ssim_value = float(ssim_metric.result().numpy())
+            ms_ssim_value = float(ms_ssim_metric.result().numpy())
+            mse_value = float(mse_metric.result().numpy())
             
-            # Post-procesar las imágenes para visualización
-            sample_lr = tf.cast(tf.clip_by_value(utils.preprocess_input(sample_lr) + tf.constant([103.939, 116.779, 123.68]), 0, 255), tf.uint8).numpy()
-            sample_hr = tf.cast(tf.clip_by_value(utils.preprocess_input(sample_hr) + tf.constant([103.939, 116.779, 123.68]), 0, 255), tf.uint8).numpy()
-            sample_fake = tf.cast(tf.clip_by_value(sample_fake, 0, 255), tf.uint8).numpy()
+            # Obtener learning rates actuales
+            g_current_lr = float(G_optimizer.learning_rate.numpy())
+            d_current_lr = float(D_optimizer.learning_rate.numpy())
             
-            # Registrar imágenes
+            # Registrar en wandb
             wandb.log({
-                "phase2/samples": [
-                    wandb.Image(sample_lr, caption="Low Resolution"),
-                    wandb.Image(sample_fake, caption="Generated"),
-                    wandb.Image(sample_hr, caption="High Resolution")
-                ],
-                "phase2/step": int(num_step.numpy()),
+                "phase2/gen_loss": gen_loss_value,
+                "phase2/disc_loss": disc_loss_value,
+                "phase2/psnr": psnr_value,
+                "phase2/ssim": ssim_value,
+                "phase2/ms_ssim": ms_ssim_value,
+                "phase2/mse": mse_value,
+                "phase2/G_learning_rate": g_current_lr,
+                "phase2/D_learning_rate": d_current_lr,
+                "phase2/step": current_step,
             })
+            
+            # Registrar imágenes cada cierto número de pasos
+            if current_step % (self.settings["print_step"] * 10) == 0:
+                # Seleccionar un ejemplo para visualización
+                if isinstance(image_lr, tf.distribute.DistributedValues):
+                    # Si estamos en entrenamiento distribuido, obtener el primer valor
+                    sample_lr = image_lr.values[0][0]
+                    sample_hr = image_hr.values[0][0]
+                else:
+                    sample_lr = image_lr[0]
+                    sample_hr = image_hr[0]
+                
+                # Generar imagen con el generador (sin entrenamiento)
+                sample_fake = generator(tf.expand_dims(sample_lr, 0), training=False)[0]
+                
+                # Procesar las imágenes para visualización
+                # Función para deshacer el preprocessing (ajustar según utils.preprocess_input)
+                def undo_preprocess(img):
+                    # Ejemplo básico - ajustar según la implementación real
+                    mean = tf.constant([103.939, 116.779, 123.68])
+                    return img[..., ::-1] + mean if hasattr(img, 'numpy') else img
+                
+                # Visualizar las imágenes
+                sample_lr_vis = tf.cast(tf.clip_by_value(sample_lr, 0, 255), tf.uint8).numpy()
+                sample_hr_vis = tf.cast(tf.clip_by_value(sample_hr, 0, 255), tf.uint8).numpy()
+                sample_fake_vis = tf.cast(tf.clip_by_value(sample_fake, 0, 255), tf.uint8).numpy()
+                
+                # Registrar imágenes en wandb
+                wandb.log({
+                    "phase2/samples": [
+                        wandb.Image(sample_lr_vis, caption="Low Resolution"),
+                        wandb.Image(sample_fake_vis, caption="Generated"),
+                        wandb.Image(sample_hr_vis, caption="High Resolution")
+                    ],
+                    "phase2/step": current_step,
+                })
+        except Exception as e:
+            logging.warning(f"Error al registrar en wandb: {e}")
 
-
-      # Logging and Checkpointing
-      if not num_step % self.settings["print_step"]:
+      # Imprimir información cada cierto número de pasos
+      if current_step % self.settings["print_step"] == 0:
+        # Formatear métricas para mostrar
         logging.info(
-            "Step: {}\tGen Loss: {}\tDisc Loss: {}"
-            "\tPSNR: {} \tSSIM: {} \tMS-SSIM: {} \tMSE: {} \tTime Taken: {} sec".format(
-                num_step,
-                gen_metric.result(),
-                disc_metric.result(),
-                psnr_metric.result(),
-                ssim_metric.result(),
-                ms_ssim_metric.result(),
-                mse_metric.result(),
+            "Step: {}\tGen Loss: {:.6f}\tDisc Loss: {:.6f}"
+            "\tPSNR: {:.4f} \tSSIM: {:.4f} \tMS-SSIM: {:.4f} \tMSE: {:.6f} \tTime Taken: {:.2f} sec".format(
+                current_step,
+                float(gen_metric.result().numpy()),
+                float(disc_metric.result().numpy()),
+                float(psnr_metric.result().numpy()),
+                float(ssim_metric.result().numpy()),
+                float(ms_ssim_metric.result().numpy()),
+                float(mse_metric.result().numpy()),
                 time.time() - start))
-        # if psnr_metric.result() > last_psnr:
+                
+        # Guardar checkpoint (siempre, ya que queremos el último estado)
         last_psnr = psnr_metric.result()
         utils.save_checkpoint(checkpoint, "phase_2", self.model_dir)
+        
+        # Reiniciar temporizador y métricas
         start = time.time()
+        gen_metric.reset_states()
+        disc_metric.reset_states()
+        psnr_metric.reset_states()
+        ssim_metric.reset_states()
+        ms_ssim_metric.reset_states()
+        mse_metric.reset_states()

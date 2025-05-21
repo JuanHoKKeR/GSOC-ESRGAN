@@ -3,12 +3,14 @@ from functools import partial
 import tensorflow as tf
 from lib import utils
 from tensorflow.keras.applications import DenseNet121
+import os
 
 
 """ Keras Models for ESRGAN
     Classes:
       RRDBNet: Generator of ESRGAN. (Residual in Residual Network)
       VGGArch: VGG28 Architecture making the Discriminator ESRGAN
+      DenseNetDiscriminator: Alternative discriminator based on DenseNet121
 """
 
 
@@ -25,6 +27,7 @@ class RRDBNet(tf.keras.Model):
         trunk_size (default: 3): number of Residual in Residual Blocks to form the trunk.
         growth_channel (default: 32): number of filters to use in the internal convolutional layers.
         use_bias (default: True): boolean to indicate if bias is to be used in the conv layers.
+        first_call (default: True): boolean to initialize weights on first call.
   """
 
   def __init__(
@@ -59,15 +62,34 @@ class RRDBNet(tf.keras.Model):
     self.conv_last_1 = conv(num_features)
     self.conv_last_2 = conv(out_channel)
     self.lrelu = tf.keras.layers.LeakyReLU(alpha=0.2)
+    
+    # Para compatibilidad con TF 2.11, se mantendrá el tracking de ambos métodos
+    self._supports_tf_logs = True
 
-  # @tf.function(
-  #    input_signature=[
-  #        tf.TensorSpec(shape=[None, None, None, 3],
-  #                      dtype=tf.float32)])
-  def call(self, inputs):
+  # El decorador @tf.function puede mejorar el rendimiento durante entrenamiento e inferencia
+  # Descomenta esta línea para mejorar el rendimiento
+  # @tf.function
+  def call(self, inputs, training=None):
+    """Método estándar de llamada de Keras
+    
+    Args:
+        inputs: Tensor de entrada con imagen de baja resolución
+        training: Booleano que indica si está en modo entrenamiento
+        
+    Returns:
+        Tensor con la imagen generada de alta resolución
+    """
     return self.unsigned_call(inputs)
 
   def unsigned_call(self, input_):
+    """Implementación interna de la inferencia
+    
+    Args:
+        input_: Tensor de entrada con imagen de baja resolución
+        
+    Returns:
+        Tensor con la imagen generada de alta resolución
+    """
     feature = self.lrelu(self.conv_first(input_))
     trunk = self.conv_trunk(self.rdb_trunk(feature))
     feature = trunk + feature
@@ -83,6 +105,7 @@ class RRDBNet(tf.keras.Model):
 class VGGArch(tf.keras.Model):
   """ Keras Model for VGG28 Architecture needed to form
       the discriminator of the architecture.
+      
       Args:
         output_shape (default: 1): output_shape of the generator
         num_features (default: 64): number of features to be used in the convolutional layers
@@ -92,7 +115,6 @@ class VGGArch(tf.keras.Model):
 
   def __init__(
           self,
-          batch_size=8,
           output_shape=1,
           num_features=64,
           use_bias=False):
@@ -102,7 +124,10 @@ class VGGArch(tf.keras.Model):
         tf.keras.layers.Conv2D,
         kernel_size=[3, 3], use_bias=use_bias, padding="same")
     batch_norm = partial(tf.keras.layers.BatchNormalization)
-    def no_batch_norm(x): return x
+    
+    # Esta función no se usa y se mantiene por compatibilidad
+    # def no_batch_norm(x): return x
+    
     self._lrelu = tf.keras.layers.LeakyReLU(alpha=0.2)
     self._dense_1 = tf.keras.layers.Dense(100)
     self._dense_2 = tf.keras.layers.Dense(output_shape)
@@ -116,11 +141,32 @@ class VGGArch(tf.keras.Model):
         self._conv_layers["conv_%d_%d" % (i, j)] = conv(
             filters=num_features * (2**i), strides=j)
         self._batch_norm["bn_%d_%d" % (i, j)] = batch_norm()
+    
+    # Para compatibilidad con TF 2.11, se mantendrá el tracking de ambos métodos
+    self._supports_tf_logs = True
 
-  def call(self, inputs):
+  # @tf.function  # Descomenta esta línea para mejorar el rendimiento
+  def call(self, inputs, training=None):
+    """Método estándar de llamada de Keras
+    
+    Args:
+        inputs: Tensor de entrada con imagen 
+        training: Booleano que indica si está en modo entrenamiento
+        
+    Returns:
+        Tensor con la clasificación (real/falso)
+    """
     return self.unsigned_call(inputs)
+    
   def unsigned_call(self, input_):
-
+    """Implementación interna de la inferencia
+    
+    Args:
+        input_: Tensor de entrada con imagen
+        
+    Returns:
+        Tensor con la clasificación (real/falso)
+    """
     features = self._lrelu(self._conv_layers["conv_0_0"](input_))
     features = self._lrelu(
         self._batch_norm["bn_0_1"](
@@ -138,7 +184,13 @@ class VGGArch(tf.keras.Model):
     return out
 
 class DenseNetDiscriminator(tf.keras.Model):
-    """Discriminador basado en DenseNet121 con pesos de KimiaNet"""
+    """Discriminador basado en DenseNet121 con pesos de KimiaNet
+    
+    Args:
+        output_shape (default: 1): Forma de salida, generalmente 1 para discriminador
+        use_bias (default: True): Si usar bias en las capas densas
+        kimianet_weights_path (default: None): Ruta al archivo de pesos KimiaNet
+    """
     
     def __init__(self, output_shape=1, use_bias=True, kimianet_weights_path=None):
         super(DenseNetDiscriminator, self).__init__()
@@ -148,7 +200,10 @@ class DenseNetDiscriminator(tf.keras.Model):
         
         # Cargar pesos de KimiaNet si se proporciona la ruta
         if kimianet_weights_path:
-            self.base_model.load_weights(kimianet_weights_path)
+            if os.path.exists(kimianet_weights_path):
+                self.base_model.load_weights(kimianet_weights_path)
+            else:
+                print(f"Advertencia: No se encontró el archivo de pesos en {kimianet_weights_path}")
         
         # Congelar algunas capas base
         for layer in self.base_model.layers[:100]:
@@ -163,21 +218,40 @@ class DenseNetDiscriminator(tf.keras.Model):
         self.dense2 = tf.keras.layers.Dense(output_shape)
         self.leaky_relu = tf.keras.layers.LeakyReLU(alpha=0.2)
         
-    def call(self, inputs):
-        return self.unsigned_call(inputs)
+        # Para compatibilidad con TF 2.11, se mantendrá el tracking de ambos métodos
+        self._supports_tf_logs = True
         
-    def unsigned_call(self, input_):
+    # @tf.function  # Descomenta esta línea para mejorar el rendimiento
+    def call(self, inputs, training=None):
+        """Método estándar de llamada de Keras
+        
+        Args:
+            inputs: Tensor de entrada con imagen
+            training: Booleano que indica si está en modo entrenamiento
+            
+        Returns:
+            Tensor con la clasificación (real/falso)
+        """
+        return self.unsigned_call(inputs, training=training)
+        
+    def unsigned_call(self, input_, training=None):
+        """Implementación interna de la inferencia
+        
+        Args:
+            input_: Tensor de entrada con imagen
+            
+        Returns:
+            Tensor con la clasificación (real/falso)
+        """
         # Procesar mediante DenseNet121/KimiaNet
-        features = self.base_model(input_)
+        features = self.base_model(input_, training=training)
         
         # Global pooling para manejar diferentes resoluciones
         pooled = self.global_pool(features)
         
         # Capas finales de clasificación
         x = self.leaky_relu(self.dense1(pooled))
-        x = self.dropout(x)
+        x = self.dropout(x, training=training)
         output = self.dense2(x)
         
         return output
-
-

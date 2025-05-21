@@ -142,14 +142,19 @@ def reform_dataset(dataset, types, size, num_elems=None):
   def generator_fn():
     for idx, data in enumerate(dataset, 1):
       if _carrier["num_elems"]:
-        if not idx % _carrier["num_elems"]:
-          raise StopIteration
+        if idx >= _carrier["num_elems"]:
+          break  # Usar break en lugar de StopIteration para mejor compatibilidad
       if data[0].shape[0] >= size[0] and data[0].shape[1] >= size[1]:
         yield data[0], data[1]
       else:
         continue
   return tf.data.Dataset.from_generator(
-      generator_fn, types, (tf.TensorShape([None, None, 3]), tf.TensorShape(None)))
+      generator_fn,
+      output_signature=(
+          tf.TensorSpec(shape=[None, None, 3], dtype=types[0]),
+          tf.TensorSpec(shape=None, dtype=types[1])
+      )
+)
 
 def load_div2k_dataset(
     hr_directory,
@@ -195,7 +200,7 @@ def load_div2k_dataset(
   if augment:
     dataset = dataset.map(
         augment_image(saturation=None),
-        num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        num_parallel_calls=tf.data.AUTOTUNE)  # Cambiado de experimental.AUTOTUNE a AUTOTUNE
   if batch_size:
     dataset = dataset.batch(batch_size, drop_remainder=True)
   if options:
@@ -257,7 +262,7 @@ def load_dataset_directory(
     dataset = dataset.with_options(options)
   dataset = dataset.map(
       low_res_map_fn,
-      num_parallel_calls=tf.data.experimental.AUTOTUNE)
+      num_parallel_calls=tf.data.AUTOTUNE)  # Cambiado de experimental.AUTOTUNE a AUTOTUNE
   if batch_size:
     dataset = dataset.batch(batch_size)
   dataset = dataset.prefetch(buffer_size)
@@ -269,7 +274,7 @@ def load_dataset_directory(
   if augment:
     dataset = dataset.map(
         augment_image(saturation=None),
-        num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        num_parallel_calls=tf.data.AUTOTUNE)  # Cambiado de experimental.AUTOTUNE a AUTOTUNE
   return dataset
 
 
@@ -317,7 +322,7 @@ def load_dataset(
     dataset = dataset.with_options(options)
   dataset = dataset.map(
       low_res_map_fn,
-      num_parallel_calls=tf.data.experimental.AUTOTUNE)
+      num_parallel_calls=tf.data.AUTOTUNE)  # Cambiado de experimental.AUTOTUNE a AUTOTUNE
   if batch_size:
     dataset = dataset.batch(batch_size)
   dataset = dataset.prefetch(buffer_size)
@@ -329,13 +334,13 @@ def load_dataset(
   if augment:
     dataset = dataset.map(
         augment_image(saturation=None),
-        num_parallel_calls=tf.data.experimental.AUTOTUNE)
+        num_parallel_calls=tf.data.AUTOTUNE)  # Cambiado de experimental.AUTOTUNE a AUTOTUNE
   return dataset
 
 
 def load_tfrecord_dataset(
         tfrecord_path, lr_size, hr_size,
-        shuffle=True, shuffle_buffer=128):
+        shuffle=True, shuffle_buffer=128, batch_size=None):  # Añadido batch_size como parámetro opcional
   """ Loads TFRecords for feeding to ESRGAN
       Args:
         tfrecord_path: Path to load .tfrecord files from.
@@ -343,6 +348,7 @@ def load_tfrecord_dataset(
         hr_size: size of the high resolution images.
         shuffle: Boolean to indicate if the data will be shuffled(default: True)
         shuffle_buffer: Size of the shuffle buffer to use (default: 128)
+        batch_size: Size of batch to create (default: None)
   """
   def _parse_tf_record(serialized_example):
     """ Parses Single Serialized Tensor from TFRecord """
@@ -363,13 +369,24 @@ def load_tfrecord_dataset(
       os.path.join(tfrecord_path, "*.tfrecord"))
   if len(files) == 0:
     raise ValueError("Path Doesn't contain any file")
-  ds = tf.data.TFRecordDataset(files).map(_parse_tf_record)
+  ds = tf.data.TFRecordDataset(files).map(
+      _parse_tf_record, num_parallel_calls=tf.data.AUTOTUNE)  # Cambiado a AUTOTUNE
+  
   if len(files) == 1:
     option = tf.data.Options()
-    option.auto_shard = False
-    ds = ds.with_options(ds)
+    option.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.OFF  # Actualizado a API de TF 2.11
+    ds = ds.with_options(option)
+  
   if shuffle:
     ds = ds.shuffle(shuffle_buffer, reshuffle_each_iteration=True)
+  
+  # Añadir batch si se proporciona
+  if batch_size:
+    ds = ds.batch(batch_size, drop_remainder=True)
+  
+  # Prefetch para mejor rendimiento
+  ds = ds.prefetch(tf.data.AUTOTUNE)
+  
   return ds
 
 
@@ -401,9 +418,10 @@ def load_dataset_from_meta_info(
     Returns:
         Un tf.data.Dataset con pares (LR, HR) de imágenes
     """
-    import tensorflow as tf
-    import os
-    from absl import logging
+    # No importar dentro de la función - ya está en el ámbito principal
+    # import tensorflow as tf
+    # import os
+    # from absl import logging
     
     # Cargar rutas de archivos de meta_info
     hr_paths = []
@@ -464,7 +482,7 @@ def load_dataset_from_meta_info(
             # Clip values between 0-255
             return tf.clip_by_value(img, 0, 255)
         except Exception as e:
-            logging.error(f"Error en imagen LR {file_path}: {e}")
+            logging.error(f"Error en imagen LR {file_path}: {str(e)}")
             return tf.zeros((*lr_size, 3), dtype=tf.float32)
     
     # Función para cargar y procesar imágenes HR
@@ -495,14 +513,14 @@ def load_dataset_from_meta_info(
             # Clip values between 0-255
             return tf.clip_by_value(img, 0, 255)
         except Exception as e:
-            logging.error(f"Error en imagen HR {file_path}: {e}")
+            logging.error(f"Error en imagen HR {file_path}: {str(e)}")
             return tf.zeros((*hr_size, 3), dtype=tf.float32)
     
     # Aplicar las funciones de carga
     lr_ds = lr_ds.map(load_and_process_lr_image, 
-                      num_parallel_calls=tf.data.experimental.AUTOTUNE)
+                      num_parallel_calls=tf.data.AUTOTUNE)  # Cambiado de experimental.AUTOTUNE a AUTOTUNE
     hr_ds = hr_ds.map(load_and_process_hr_image,
-                      num_parallel_calls=tf.data.experimental.AUTOTUNE)
+                      num_parallel_calls=tf.data.AUTOTUNE)  # Cambiado de experimental.AUTOTUNE a AUTOTUNE
     
     # Combinar datasets
     dataset = tf.data.Dataset.zip((lr_ds, hr_ds))
@@ -510,7 +528,7 @@ def load_dataset_from_meta_info(
     # Aplicar transformaciones adicionales si se proporcionan
     if transforms:
         dataset = dataset.map(transforms, 
-                             num_parallel_calls=tf.data.experimental.AUTOTUNE)
+                             num_parallel_calls=tf.data.AUTOTUNE)  # Cambiado de experimental.AUTOTUNE a AUTOTUNE
     
     # Configurar dataset
     if shuffle:
@@ -520,6 +538,6 @@ def load_dataset_from_meta_info(
         dataset = dataset.repeat()
     
     dataset = dataset.batch(batch_size, drop_remainder=True)
-    dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+    dataset = dataset.prefetch(tf.data.AUTOTUNE)  # Cambiado de experimental.AUTOTUNE a AUTOTUNE
     
     return dataset

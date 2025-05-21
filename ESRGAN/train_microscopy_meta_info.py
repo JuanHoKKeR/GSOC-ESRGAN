@@ -7,12 +7,19 @@ from lib.dataset import load_dataset_from_meta_info
 from lib import settings, train, model, utils
 
 
-from tensorflow.keras.mixed_precision import experimental as mixed_precision
-
-policy = mixed_precision.Policy('mixed_float16')
-
-mixed_precision.set_policy(policy)
-print("Mixed precision activada: ", policy)
+# Usar la nueva API de precisión mixta para TF 2.11
+try:
+    # En TF 2.11, la API recomendada es:
+    from tensorflow.keras import mixed_precision
+    mixed_precision.set_global_policy('mixed_float16')
+    policy = mixed_precision.get_global_policy()
+    print(f"Mixed precision activada: {policy}")
+except (ImportError, AttributeError):
+    # Compatibilidad con versiones anteriores
+    from tensorflow.keras.mixed_precision import experimental as mixed_precision
+    policy = mixed_precision.Policy('mixed_float16')
+    mixed_precision.set_policy(policy)
+    print(f"Mixed precision activada (versión anterior): {policy}")
 
 # Comprobar que la GPU está disponible
 physical_devices = tf.config.list_physical_devices('GPU')
@@ -23,7 +30,10 @@ else:
     print(f"Detectadas {len(physical_devices)} GPUs")
     # Habilitar crecimiento de memoria
     for device in physical_devices:
-        tf.config.experimental.set_memory_growth(device, True)
+        try:
+            tf.config.experimental.set_memory_growth(device, True)
+        except Exception as e:
+            print(f"Error al configurar memory growth: {e}")
 
 try:
     import wandb
@@ -69,6 +79,11 @@ class CustomTrainer(train.Trainer):
         self.use_wandb = use_wandb and WANDB_AVAILABLE
         self.batch_size = self.settings["batch_size"]
         
+        # Obtener dimensiones de la configuración
+        dataset_args = self.settings.get("dataset", {})
+        self.hr_dimension = dataset_args.get("hr_dimension", 512)
+        lr_dimension = self.hr_dimension // 4  # Factor de escala por defecto es 4
+        
         # Comprobar que los archivos existen
         for file_path in [hr_meta_file, lr_meta_file]:
             if not os.path.exists(file_path):
@@ -86,12 +101,17 @@ class CustomTrainer(train.Trainer):
                 base_path=base_path,
                 batch_size=self.batch_size,
                 shuffle=True,
-                lr_size=(128, 128),
-                hr_size=(512, 512)
+                lr_size=(lr_dimension, lr_dimension),
+                hr_size=(self.hr_dimension, self.hr_dimension)
             )
+            
             # Verificar que el dataset está funcionando correctamente
-            sample = next(iter(dataset_iter))
-            logging.info(f"Muestra de dataset - LR shape: {sample[0].shape}, HR shape: {sample[1].shape}")
+            try:
+                sample = next(iter(dataset_iter))
+                logging.info(f"Muestra de dataset - LR shape: {sample[0].shape}, HR shape: {sample[1].shape}")
+            except Exception as e:
+                logging.error(f"Error al obtener muestra del dataset: {e}")
+                raise
             
             self.dataset = iter(dataset_iter)
             logging.info("Dataset cargado correctamente")
@@ -128,8 +148,12 @@ def main():
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=4,
-        help="Tamaño de batch (default: 4)")
+        default=16,
+        help="Tamaño de batch (default: 16)")
+    parser.add_argument(
+        "--kimianet_weights",
+        default=None,
+        help="Ruta a los pesos de KimiaNet (opcional)")
     parser.add_argument(
         "--wandb_project",
         default="esrgan-microscopy",
@@ -201,6 +225,10 @@ def main():
     config["batch_size"] = args.batch_size
     
     # Guardar configuración actualizada
+    config_dir = os.path.dirname(args.config)
+    if config_dir and not os.path.exists(config_dir):
+        os.makedirs(config_dir, exist_ok=True)
+        
     with open(args.config, 'w') as f:
         yaml.dump(config, f, default_flow_style=False)
     
@@ -209,8 +237,6 @@ def main():
     
     # Configurar strategy para GPU
     strategy = utils.SingleDeviceStrategy()
-    for physical_device in tf.config.experimental.list_physical_devices("GPU"):
-        tf.config.experimental.set_memory_growth(physical_device, True)
     
     # Crear writers de TensorBoard
     summary_writer_1 = tf.summary.create_file_writer(os.path.join(args.log_dir, "phase1"))
@@ -218,30 +244,48 @@ def main():
     
     # Inicializar modelos
     logging.info("Inicializando modelos...")
-    discriminator = model.DenseNetDiscriminator(kimianet_weights_path="/model-kimianet/KimiaNetKerasWeights.h5")
-    generator = model.RRDBNet(out_channel=3)
-    
-    # Inicializar los parámetros del modelo
-    logging.info("Inicializando parámetros del generador...")
-    generator.unsigned_call(tf.random.normal([1, 128, 128, 3]))
+    try:
+        # Usar ruta de pesos KimiaNet si se proporciona, sino None
+        kimianet_weights_path = args.kimianet_weights
+        if kimianet_weights_path and not os.path.exists(kimianet_weights_path):
+            logging.warning(f"No se encontró el archivo de pesos KimiaNet en {kimianet_weights_path}. Se usará sin pesos preentrenados.")
+            kimianet_weights_path = None
+            
+        discriminator = model.DenseNetDiscriminator(kimianet_weights_path=kimianet_weights_path)
+        generator = model.RRDBNet(out_channel=3)
+        
+        # Inicializar los parámetros del modelo - usar método call compatible con TF 2.11
+        logging.info("Inicializando parámetros del generador...")
+        # Usar el método call estándar en lugar de unsigned_call
+        generator(tf.random.normal([1, 128, 128, 3]), training=True)
+        
+        logging.info("Modelos inicializados correctamente")
+    except Exception as e:
+        logging.error(f"Error al inicializar los modelos: {e}")
+        raise
     
     # Inicializar trainer personalizado
     logging.info("Creando trainer customizado...")
-    trainer = CustomTrainer(
-        summary_writer=summary_writer_1,
-        summary_writer_2=summary_writer_2,
-        settings=sett,
-        model_dir=args.model_dir,
-        hr_meta_file=args.hr_meta_file,
-        lr_meta_file=args.lr_meta_file,
-        base_path=args.base_path,
-        strategy=strategy,
-        use_wandb=use_wandb
-    )
+    try:
+        trainer = CustomTrainer(
+            summary_writer=summary_writer_1,
+            summary_writer_2=summary_writer_2,
+            settings=sett,
+            model_dir=args.model_dir,
+            hr_meta_file=args.hr_meta_file,
+            lr_meta_file=args.lr_meta_file,
+            base_path=args.base_path,
+            strategy=strategy,
+            use_wandb=use_wandb
+        )
+        logging.info("Trainer creado correctamente")
+    except Exception as e:
+        logging.error(f"Error al crear el trainer: {e}")
+        raise
     
     # Inicializar Stats
     stats_file = os.path.join(os.path.dirname(args.config), "stats.yaml")
-    Stats = settings.Stats(stats_file)
+    stats = settings.Stats(stats_file)
     
     # Entrenar según las fases especificadas
     phases = args.phase.lower().split("_")
@@ -249,7 +293,7 @@ def main():
         logging.info("Iniciando fase 1 (PSNR)")
         try:
             trainer.warmup_generator(generator)
-            Stats["train_step_1"] = True
+            stats["train_step_1"] = True
             logging.info("Fase 1 completada")
         except Exception as e:
             logging.error(f"Error en fase 1: {e}")
@@ -259,32 +303,53 @@ def main():
         logging.info("Iniciando fase 2 (GAN)")
         try:
             trainer.train_gan(generator, discriminator)
-            Stats["train_step_2"] = True
+            stats["train_step_2"] = True
             logging.info("Fase 2 completada")
         except Exception as e:
             logging.error(f"Error en fase 2: {e}")
             raise
     
     # Guardar modelo interpolado si se completaron ambas fases
-    if Stats["train_step_1"] and Stats["train_step_2"]:
+    if stats["train_step_1"] and stats["train_step_2"]:
         logging.info("Guardando modelo interpolado")
         try:
+            # Obtener dimensiones de la configuración o usar valores predeterminados
+            hr_dim = sett.get("dataset", {}).get("hr_dimension", 512)
+            # Usar dimensions proporcionadas por la configuración
+            interp_param = sett.get("interpolation_parameter", 0.8)
+            
             interpolated_generator = utils.interpolate_generator(
                 lambda: model.RRDBNet(out_channel=3, first_call=False),
                 discriminator,
-                sett["interpolation_parameter"],
-                [720, 1080],
+                interp_param,
+                [hr_dim, hr_dim],  # Usar dimensiones consistentes
                 basepath=args.model_dir
             )
-            tf.saved_model.save(
-                interpolated_generator, 
-                os.path.join(args.model_dir, "esrgan")
-            )
+            
+            # Guardar el modelo en formato SavedModel
+            save_path = os.path.join(args.model_dir, "esrgan")
+            try:
+                tf.saved_model.save(interpolated_generator, save_path)
+                logging.info(f"Modelo guardado en {save_path}")
+            except Exception as e:
+                logging.error(f"Error al guardar el modelo en formato SavedModel: {e}")
+                
+                # Intento alternativo: guardar los pesos
+                try:
+                    weights_path = os.path.join(args.model_dir, "esrgan_weights")
+                    interpolated_generator.save_weights(weights_path)
+                    logging.info(f"Pesos del modelo guardados en {weights_path}")
+                except Exception as e2:
+                    logging.error(f"Error al guardar los pesos del modelo: {e2}")
             
             # Guardar modelo en wandb
             if use_wandb:
-                wandb.save(os.path.join(args.model_dir, "esrgan"))
-                wandb.finish()
+                try:
+                    wandb.save(os.path.join(args.model_dir, "esrgan*"))
+                    wandb.finish()
+                    logging.info("Modelo registrado en wandb")
+                except Exception as e:
+                    logging.error(f"Error al guardar modelo en wandb: {e}")
                 
             logging.info("Modelo guardado correctamente")
         except Exception as e:
@@ -294,4 +359,12 @@ def main():
     logging.info("Entrenamiento completado")
 
 if __name__ == "__main__":
-    main()
+    # Configurar manejo de excepciones global
+    try:
+        main()
+    except Exception as e:
+        logging.error(f"Error fatal: {e}", exc_info=True)
+        # Si wandb está activo, finalizarlo correctamente
+        if WANDB_AVAILABLE and wandb.run is not None:
+            wandb.finish(exit_code=1)
+        raise

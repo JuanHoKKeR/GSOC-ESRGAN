@@ -4,9 +4,8 @@ import itertools
 import functools
 import argparse
 from absl import logging
-import tensorflow.compat.v2 as tf
+import tensorflow as tf
 import tensorflow_hub as hub
-tf.enable_v2_behavior()
 
 def build_dataset(
     lr_glob,
@@ -118,6 +117,7 @@ if __name__ == "__main__":
   flags, unknown = parser.parse_known_args()
   if not (flags.lr_files and flags.hr_files):
     logging.error("Must set flag --lr_files and --hr_files")
+    import sys
     sys.exit(1)
   log_levels = [logging.FATAL, logging.WARN, logging.INFO, logging.DEBUG]
   log_level = log_levels[min(flags.verbose, len(log_levels) - 1)]

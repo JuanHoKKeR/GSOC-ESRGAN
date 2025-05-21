@@ -1,12 +1,16 @@
 import os
-from functools import partial
 import argparse
+from functools import partial
 from absl import logging
+import tensorflow as tf
 from lib import settings, train, model, utils
-from tensorflow.python.eager import profiler
-import tensorflow.compat.v2 as tf
-import wandb
-tf.enable_v2_behavior()
+
+try:
+    import wandb
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    logging.warning("Wandb no está disponible. Continuando sin tracking.")
 """ Enhanced Super Resolution GAN.
     Citation:
       @article{DBLP:journals/corr/abs-1809-00219,
