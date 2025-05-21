@@ -19,13 +19,13 @@ docker exec -it esrgan-container bash -c "cd /workspace && \
     python train_microscopy_meta_info.py \
         --hr_meta_file 'datasets/paired_meta/paired_hr_meta.txt' \
         --lr_meta_file 'datasets/paired_meta/paired_lr_meta.txt' \
-        --base_path '' \
         --model_dir '/workspace/model' \
         --log_dir '/workspace/logs' \
+        --kimianet_weights '/workspace/KimiaNetKerasWeights.h5' \
         --batch_size 32 \
         --wandb_name 'microscopy-training' \
         --phase 'phase1_phase2' \
-        -vv"
+        -v"
 
 # Usar este comando para verificar logs
 echo "Puedes verificar logs con:"

@@ -3,8 +3,8 @@ version: '3'
 services:
   esrgan:
     build: .
-    image: esrgan-gpu:latest
-    container_name: esrgan-container
+    image: esrgan-gpu-tf2.11:latest
+    container_name: esrgan-tf211-container
     volumes:
       - ./ESRGAN:/workspace
       - /media/adalab/Bodega/JuanCruz/Microscopy:/media/adalab/Bodega/JuanCruz/Microscopy
@@ -16,6 +16,8 @@ services:
       - TF_FORCE_GPU_ALLOW_GROWTH=true
       - TF_CPP_MIN_LOG_LEVEL=2
       - PYTHONPATH=/workspace
+      - CUDA_VISIBLE_DEVICES=0
+      - XLA_FLAGS=--xla_gpu_cuda_data_dir=/usr/local/cuda/
     deploy:
       resources:
         reservations:
@@ -23,6 +25,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    shm_size: '16gb'  # Aumentado para manejar grandes batches
     tty: true
     stdin_open: true
     command: bash
