@@ -5,10 +5,25 @@ from absl import logging
 import tensorflow as tf
 from lib.dataset import load_dataset_from_meta_info
 from lib import settings, train, model, utils
+
+
 from tensorflow.keras.mixed_precision import experimental as mixed_precision
+
 policy = mixed_precision.Policy('mixed_float16')
-mixed_precision.set_global_policy(policy)
-print("Mixed precision activada: ", mixed_precision.global_policy())
+
+mixed_precision.set_policy(policy)
+print("Mixed precision activada: ", policy)
+
+# Comprobar que la GPU está disponible
+physical_devices = tf.config.list_physical_devices('GPU')
+print("Dispositivos GPU disponibles:", physical_devices)
+if not physical_devices:
+    print("ADVERTENCIA: No se detectó ninguna GPU. El entrenamiento será muy lento.")
+else:
+    print(f"Detectadas {len(physical_devices)} GPUs")
+    # Habilitar crecimiento de memoria
+    for device in physical_devices:
+        tf.config.experimental.set_memory_growth(device, True)
 
 try:
     import wandb
