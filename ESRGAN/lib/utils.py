@@ -330,8 +330,13 @@ class RDB(tf.keras.layers.Layer):
     if self._first_call:
       logging.debug("Initializing with MSRA")
       for _, layer in self._conv2d_layers.items():
-        for variable in layer.trainable_variables:
-          variable.assign(0.1 * variable)
+          for variable in layer.trainable_variables:
+              # Convertir explícitamente a float32 para la operación y luego de vuelta al tipo original
+              original_dtype = variable.dtype
+              value = tf.cast(variable, tf.float32)
+              value = 0.1 * value
+              value = tf.cast(value, original_dtype)
+              variable.assign(value)
       self._first_call = False
     return input_ + self._beta * x5
 

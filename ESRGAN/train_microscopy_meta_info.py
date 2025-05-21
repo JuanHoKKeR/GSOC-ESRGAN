@@ -9,17 +9,13 @@ from lib import settings, train, model, utils
 
 # Usar la nueva API de precisión mixta para TF 2.11
 try:
-    # En TF 2.11, la API recomendada es:
     from tensorflow.keras import mixed_precision
     mixed_precision.set_global_policy('mixed_float16')
-    policy = mixed_precision.get_global_policy()
+    policy = mixed_precision.global_policy()
     print(f"Mixed precision activada: {policy}")
-except (ImportError, AttributeError):
-    # Compatibilidad con versiones anteriores
-    from tensorflow.keras.mixed_precision import experimental as mixed_precision
-    policy = mixed_precision.Policy('mixed_float16')
-    mixed_precision.set_policy(policy)
-    print(f"Mixed precision activada (versión anterior): {policy}")
+except Exception as e:
+    print(f"Error al configurar mixed precision: {e}")
+    print("Continuando sin mixed precision...")
 
 # Comprobar que la GPU está disponible
 physical_devices = tf.config.list_physical_devices('GPU')

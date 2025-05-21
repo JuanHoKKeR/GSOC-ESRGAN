@@ -4,6 +4,7 @@ from functools import partial
 from absl import logging
 import tensorflow as tf
 from lib import utils, dataset
+from tensorflow.keras.optimizers.legacy import Adam
 try:
   import wandb
   WANDB_AVAILABLE = True
@@ -124,7 +125,7 @@ class Trainer(object):
     ms_ssim_metric = tf.keras.metrics.Mean()
     mse_metric = tf.keras.metrics.Mean()
     # Generator Optimizer
-    G_optimizer = tf.keras.optimizers.Adam(
+    G_optimizer = Adam(
         learning_rate=phase_args["adam"]["initial_lr"],
         beta_1=phase_args["adam"]["beta_1"],
         beta_2=phase_args["adam"]["beta_2"])

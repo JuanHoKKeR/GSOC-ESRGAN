@@ -44,30 +44,15 @@ COPY ESRGAN/requirements.txt .
 # Actualizar pip y setuptools
 RUN pip install --upgrade pip setuptools wheel
 
-# Instalar dependencias para TensorFlow 2.11.0
-RUN pip install --no-cache-dir \
-    absl-py==1.4.0 \
-    attrs==23.1.0 \
-    cachetools==5.3.1 \
-    numpy==1.23.5 \
-    scipy==1.10.1 \
-    tensorflow==2.11.0 \
-    tensorflow-datasets==4.8.3 \
-    tensorflow-estimator==2.11.0 \
-    tensorflow-io-gcs-filesystem==0.31.0 \
-    tensorflow-metadata==1.13.1 \
-    tensorflow-hub==0.13.0 \
-    PyYAML==6.0 \
-    pillow==9.5.0 \
-    wandb==0.15.4 \
-    tqdm==4.65.0
+RUN pip install -r requirements.txt
 
-# Instalar dependencias adicionales
-RUN pip install --no-cache-dir \
-    protobuf==3.19.6 \
-    tensorboard==2.11.2 \
-    grpcio==1.54.2 \
-    h5py==3.8.0
+# Instalar paquetes que requieren --no-deps para evitar conflictos
+RUN pip install --no-deps \
+    tensorflow-datasets==4.8.3 \
+    tensorflow-hub==0.12.0 \
+    tensorflow-metadata==1.12.0 \
+    googleapis-common-protos==1.58.0
+
 
 # Configurar variables de entorno
 ENV PYTHONPATH=/workspace
