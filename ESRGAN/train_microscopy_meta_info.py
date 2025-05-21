@@ -8,14 +8,14 @@ from lib import settings, train, model, utils
 
 
 # Usar la nueva API de precisión mixta para TF 2.11
-try:
-    from tensorflow.keras import mixed_precision
-    mixed_precision.set_global_policy('mixed_float16')
-    policy = mixed_precision.global_policy()
-    print(f"Mixed precision activada: {policy}")
-except Exception as e:
-    print(f"Error al configurar mixed precision: {e}")
-    print("Continuando sin mixed precision...")
+#try:
+#    from tensorflow.keras import mixed_precision
+#    mixed_precision.set_global_policy('mixed_float16')
+#    policy = mixed_precision.global_policy()
+#    print(f"Mixed precision activada: {policy}")
+#except Exception as e:
+#    print(f"Error al configurar mixed precision: {e}")
+#    print("Continuando sin mixed precision...")
 
 # Comprobar que la GPU está disponible
 physical_devices = tf.config.list_physical_devices('GPU')
@@ -151,6 +151,10 @@ def main():
         default=None,
         help="Ruta a los pesos de KimiaNet (opcional)")
     parser.add_argument(
+        "--pretrained_model",
+        default=None,
+        help="Ruta al modelo ESRGAN preentrenado para inicializar el generador")
+    parser.add_argument(
         "--wandb_project",
         default="esrgan-microscopy",
         help="Nombre del proyecto en wandb (default: esrgan-microscopy)")
@@ -248,12 +252,23 @@ def main():
             kimianet_weights_path = None
             
         discriminator = model.DenseNetDiscriminator(kimianet_weights_path=kimianet_weights_path)
+        #discriminator = model.VGGArch(batch_size=sett["batch_size"], num_features=64)
         generator = model.RRDBNet(out_channel=3)
         
         # Inicializar los parámetros del modelo - usar método call compatible con TF 2.11
         logging.info("Inicializando parámetros del generador...")
         # Usar el método call estándar en lugar de unsigned_call
         generator(tf.random.normal([1, 128, 128, 3]), training=True)
+
+        # Cargar pesos preentrenados si se proporcionó la ruta
+        if args.pretrained_model and os.path.exists(args.pretrained_model):
+            logging.info(f"Cargando modelo preentrenado desde: {args.pretrained_model}")
+            generator = utils.load_pretrained_generator(generator, args.pretrained_model)
+            logging.info("Modelo preentrenado cargado como base para fine-tuning")
+        else:
+            logging.info("No se proporcionó modelo preentrenado. Usando inicialización aleatoria.")
+
+
         
         logging.info("Modelos inicializados correctamente")
     except Exception as e:

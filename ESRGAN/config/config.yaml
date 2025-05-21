@@ -1,6 +1,6 @@
 RDB:
   residual_scale_beta: 0.2
-batch_size: 16
+batch_size: 8
 checkpoint_path:
   phase_1: checkpoints/phase_1
   phase_2: checkpoints/phase_2

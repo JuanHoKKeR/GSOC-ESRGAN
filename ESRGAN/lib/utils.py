@@ -381,3 +381,91 @@ def calculate_mse(y_true, y_pred):
     y_true = tf.cast(y_true, tf.float32)
     y_pred = tf.cast(y_pred, tf.float32)
     return tf.reduce_mean(tf.square(y_true - y_pred))
+
+def load_pretrained_generator(generator, pretrained_path):
+    """Carga pesos preentrenados en el generador RRDBNet
+    
+    Args:
+        generator: Instancia de RRDBNet para cargar los pesos
+        pretrained_path: Ruta al directorio del modelo SavedModel de ESRGAN
+        
+    Returns:
+        El generador con los pesos preentrenados cargados
+    """
+    logging.info(f"Cargando pesos preentrenados desde: {pretrained_path}")
+    
+    try:
+        # Asegurarse de que el generador está inicializado
+        if not generator.built:
+            dummy_input = tf.random.normal([1, 128, 128, 3])
+            generator(dummy_input)
+            logging.info("Inicializado generador con pesos aleatorios")
+        
+        # Corregir la ruta si se está apuntando directamente al archivo saved_model.pb
+        model_dir = pretrained_path
+        if pretrained_path.endswith('saved_model.pb'):
+            model_dir = os.path.dirname(pretrained_path)
+            logging.info(f"Ajustando ruta de modelo a directorio: {model_dir}")
+        
+        # Verificar que el directorio existe y contiene un SavedModel
+        if not os.path.exists(os.path.join(model_dir, 'saved_model.pb')) and not os.path.exists(os.path.join(model_dir, 'saved_model.pbtxt')):
+            logging.warning(f"No se encontró saved_model.pb ni saved_model.pbtxt en {model_dir}")
+            # Buscar recursivamente en subdirectorios
+            for root, dirs, files in os.walk(model_dir):
+                if 'saved_model.pb' in files:
+                    model_dir = root
+                    logging.info(f"Encontrado saved_model.pb en: {model_dir}")
+                    break
+        
+        # Cargar el modelo preentrenado
+        pretrained_model = tf.saved_model.load(model_dir)
+        logging.info("Modelo preentrenado cargado correctamente")
+        
+        # Imprimir estructura de variables para depuración
+        logging.debug("Variables en el generador:")
+        gen_var_names = [v.name for v in generator.variables]
+        for name in gen_var_names[:5]:  # Mostrar las primeras 5 variables
+            logging.debug(f"  {name}")
+        
+        logging.debug("Variables en el modelo preentrenado:")
+        pretrained_var_names = [v.name for v in pretrained_model.variables]
+        for name in pretrained_var_names[:5]:  # Mostrar las primeras 5 variables
+            logging.debug(f"  {name}")
+        
+        # Crear mapa de variables
+        var_mapping = {}
+        for gen_var in generator.variables:
+            # Extraer el nombre sin prefijo del modelo y sin sufijo de índice
+            var_name = gen_var.name.split('/')[-1].split(':')[0]
+            var_mapping[var_name] = gen_var
+        
+        # Transferir pesos
+        transferred_count = 0
+        for pretrained_var in pretrained_model.variables:
+            # Obtener nombre simplificado de la variable preentrenada
+            pre_var_name = pretrained_var.name.split('/')[-1].split(':')[0]
+            
+            # Buscar la variable correspondiente en el generador
+            if pre_var_name in var_mapping:
+                gen_var = var_mapping[pre_var_name]
+                
+                # Verificar compatibilidad de formas
+                if gen_var.shape == pretrained_var.shape:
+                    gen_var.assign(pretrained_var)
+                    transferred_count += 1
+                else:
+                    logging.warning(f"Forma incompatible para {pre_var_name}: {gen_var.shape} vs {pretrained_var.shape}")
+        
+        logging.info(f"Se transfirieron {transferred_count} variables de {len(generator.variables)}")
+        
+        # Validar que la carga funcionó
+        test_input = tf.random.normal([1, 128, 128, 3])
+        test_output = generator(test_input)
+        logging.info(f"Prueba de inferencia exitosa. Forma de salida: {test_output.shape}")
+        
+        return generator
+    
+    except Exception as e:
+        logging.error(f"Error al cargar pesos preentrenados: {e}", exc_info=True)
+        logging.info("Continuando con inicialización aleatoria")
+        return generator

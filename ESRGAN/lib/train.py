@@ -145,7 +145,11 @@ class Trainer(object):
       logging.debug("Starting Distributed Step")
       with tf.GradientTape() as tape:
         # Usar generator.call con training=True para asegurar que el modelo esté en modo entrenamiento
-        fake = generator(image_lr, training=True)
+        if hasattr(generator, "unsigned_call"):
+            fake = generator.unsigned_call(image_lr)
+        else:
+            fake = generator(image_lr, training=True)
+
         loss = utils.pixel_loss(image_hr, fake) * (1.0 / self.batch_size)
       
       # Calcular métricas
@@ -399,11 +403,17 @@ class Trainer(object):
       
       with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
         # Usar call con training=True
-        fake = generator(image_lr, training=True)
+
+        if hasattr(generator, "unsigned_call"):
+            fake = generator.unsigned_call(image_lr)
+        else:
+            fake = generator(image_lr, training=True)
+        
         logging.debug("Generated fake image")
         
         # Pre-procesar imágenes si es necesario
         fake_processed = utils.preprocess_input(fake)
+        lr_processed = utils.preprocess_input(image_lr)
         hr_processed = utils.preprocess_input(image_hr)
         
         # Calcular pérdidas

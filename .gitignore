@@ -32,3 +32,4 @@ ESRGAN/datasets/meta_info_256.txt
 ESRGAN/datasets/meta_info_512.txt
 ESRGAN/datasets/meta_info_1024.txt
 ESRGAN/model-kimianet
+ESRGAN/model-esrgantf2

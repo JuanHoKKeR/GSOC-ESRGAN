@@ -115,6 +115,7 @@ class VGGArch(tf.keras.Model):
 
   def __init__(
           self,
+          batch_size=8,
           output_shape=1,
           num_features=64,
           use_bias=False):
