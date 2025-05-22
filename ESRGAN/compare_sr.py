@@ -4,8 +4,109 @@ import numpy as np
 import tensorflow as tf
 from PIL import Image
 import matplotlib.pyplot as plt
-from lib import model
 import time
+from functools import partial
+from collections import OrderedDict
+
+# Definir el modelo RRDBNet directamente para evitar dependencias
+class RDB(tf.keras.layers.Layer):
+    """Residual Dense Block Layer"""
+    def __init__(self, out_features=32, bias=True, first_call=True):
+        super(RDB, self).__init__()
+        _create_conv2d = partial(
+            tf.keras.layers.Conv2D,
+            out_features,
+            kernel_size=[3, 3],
+            kernel_initializer="he_normal",
+            bias_initializer="zeros",
+            strides=[1, 1], padding="same", use_bias=bias)
+        self._conv2d_layers = {
+            "conv_1": _create_conv2d(),
+            "conv_2": _create_conv2d(),
+            "conv_3": _create_conv2d(),
+            "conv_4": _create_conv2d(),
+            "conv_5": _create_conv2d()}
+        self._lrelu = tf.keras.layers.LeakyReLU(alpha=0.2)
+        self._beta = 0.2  # Valor por defecto
+        self._first_call = first_call
+
+    def call(self, input_):
+        x1 = self._lrelu(self._conv2d_layers["conv_1"](input_))
+        x2 = self._lrelu(self._conv2d_layers["conv_2"](
+            tf.concat([input_, x1], -1)))
+        x3 = self._lrelu(self._conv2d_layers["conv_3"](
+            tf.concat([input_, x1, x2], -1)))
+        x4 = self._lrelu(self._conv2d_layers["conv_4"](
+            tf.concat([input_, x1, x2, x3], -1)))
+        x5 = self._conv2d_layers["conv_5"](tf.concat([input_, x1, x2, x3, x4], -1))
+        if self._first_call:
+            for _, layer in self._conv2d_layers.items():
+                for variable in layer.trainable_variables:
+                    original_dtype = variable.dtype
+                    value = tf.cast(variable, tf.float32)
+                    value = 0.1 * value
+                    value = tf.cast(value, original_dtype)
+                    variable.assign(value)
+            self._first_call = False
+        return input_ + self._beta * x5
+
+
+class RRDB(tf.keras.layers.Layer):
+    """Residual in Residual Block Layer"""
+    def __init__(self, out_features=32, first_call=True):
+        super(RRDB, self).__init__()
+        self.RDB1 = RDB(out_features, first_call=first_call)
+        self.RDB2 = RDB(out_features, first_call=first_call)
+        self.RDB3 = RDB(out_features, first_call=first_call)
+        self.beta = 0.2
+
+    def call(self, input_):
+        out = self.RDB1(input_)
+        out = self.RDB2(out)
+        out = self.RDB3(out)
+        return input_ + self.beta * out
+
+
+class RRDBNet(tf.keras.Model):
+    """Generador ESRGAN independiente"""
+    def __init__(self, out_channel, num_features=32, trunk_size=11, growth_channel=32, use_bias=True, first_call=True):
+        super(RRDBNet, self).__init__()
+        self.rrdb_block = partial(RRDB, growth_channel, first_call=first_call)
+        conv = partial(
+            tf.keras.layers.Conv2D,
+            kernel_size=[3, 3],
+            strides=[1, 1],
+            padding="same",
+            use_bias=use_bias)
+        conv_transpose = partial(
+            tf.keras.layers.Conv2DTranspose,
+            kernel_size=[3, 3],
+            strides=[2, 2],
+            padding="same",
+            use_bias=use_bias)
+        self.conv_first = conv(filters=num_features)
+        self.rdb_trunk = tf.keras.Sequential(
+            [self.rrdb_block() for _ in range(trunk_size)])
+        self.conv_trunk = conv(filters=num_features)
+        # Upsample
+        self.upsample1 = conv_transpose(num_features)
+        self.upsample2 = conv_transpose(num_features)
+        self.conv_last_1 = conv(num_features)
+        self.conv_last_2 = conv(out_channel)
+        self.lrelu = tf.keras.layers.LeakyReLU(alpha=0.2)
+
+    def call(self, inputs, training=None):
+        return self.unsigned_call(inputs)
+
+    def unsigned_call(self, input_):
+        feature = self.lrelu(self.conv_first(input_))
+        trunk = self.conv_trunk(self.rdb_trunk(feature))
+        feature = trunk + feature
+        feature = self.lrelu(self.upsample1(feature))
+        feature = self.lrelu(self.upsample2(feature))
+        feature = self.lrelu(self.conv_last_1(feature))
+        out = self.conv_last_2(feature)
+        return out
 
 
 def load_trained_esrgan(checkpoint_path):
@@ -13,7 +114,7 @@ def load_trained_esrgan(checkpoint_path):
     print("Cargando modelo ESRGAN entrenado...")
     
     # Crear el generador con la misma configuración
-    generator = model.RRDBNet(out_channel=3)
+    generator = RRDBNet(out_channel=3)
     
     # Inicializar el modelo con una entrada dummy
     dummy_input = tf.random.normal([1, 128, 128, 3])
@@ -21,9 +122,14 @@ def load_trained_esrgan(checkpoint_path):
     
     # Crear checkpoint y restaurar
     checkpoint = tf.train.Checkpoint(G=generator)
-    status = checkpoint.restore(tf.train.latest_checkpoint(checkpoint_path))
+    latest_checkpoint = tf.train.latest_checkpoint(checkpoint_path)
     
-    print(f"Modelo cargado desde: {tf.train.latest_checkpoint(checkpoint_path)}")
+    if latest_checkpoint is None:
+        raise ValueError(f"No se encontró ningún checkpoint en {checkpoint_path}")
+    
+    status = checkpoint.restore(latest_checkpoint)
+    
+    print(f"Modelo cargado desde: {latest_checkpoint}")
     return generator
 
 
