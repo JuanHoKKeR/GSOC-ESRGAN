@@ -3,6 +3,7 @@ from functools import partial
 import tensorflow as tf
 from absl import logging
 from lib import settings
+from tensorflow.keras.optimizers import Adam
 
 """ Utility functions needed for training ESRGAN model. """
 
@@ -74,7 +75,7 @@ def interpolate_generator(
   if not tf.nest.is_nested(dimension):
     size = [dimension, dimension]
   logging.debug("Interpolating generator. Alpha: %f" % alpha)
-  optimizer = partial(tf.keras.optimizers.Adam)
+  optimizer = partial(Adam)
   gan_generator = generator_fn()
   psnr_generator = generator_fn()
   # building generators

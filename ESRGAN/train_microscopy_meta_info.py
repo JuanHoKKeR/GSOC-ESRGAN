@@ -251,8 +251,9 @@ def main():
             logging.warning(f"No se encontró el archivo de pesos KimiaNet en {kimianet_weights_path}. Se usará sin pesos preentrenados.")
             kimianet_weights_path = None
             
-        discriminator = model.DenseNetDiscriminator(kimianet_weights_path=kimianet_weights_path)
+        # discriminator = model.DenseNetDiscriminator(kimianet_weights_path=kimianet_weights_path)
         #discriminator = model.VGGArch(batch_size=sett["batch_size"], num_features=64)
+        discriminator = model.OptimizedVGGArch(batch_size=sett["batch_size"], num_features=32)
         generator = model.RRDBNet(out_channel=3)
         
         # Inicializar los parámetros del modelo - usar método call compatible con TF 2.11

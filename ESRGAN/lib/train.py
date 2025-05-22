@@ -338,8 +338,9 @@ class Trainer(object):
     hr_dimension = self.settings["dataset"]["hr_dimension"]
     eta = phase_args["eta"]
     total_steps = phase_args["num_steps"]
+    
     optimizer = partial(
-        tf.keras.optimizers.Adam,
+        Adam,
         learning_rate=phase_args["adam"]["initial_lr"],
         beta_1=phase_args["adam"]["beta_1"],
         beta_2=phase_args["adam"]["beta_2"])

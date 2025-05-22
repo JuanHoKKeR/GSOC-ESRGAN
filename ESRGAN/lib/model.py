@@ -256,3 +256,57 @@ class DenseNetDiscriminator(tf.keras.Model):
         output = self.dense2(x)
         
         return output
+    
+class OptimizedVGGArch(tf.keras.Model):
+  """ Versión optimizada del discriminador VGG para usar menos memoria """
+
+  def __init__(self, batch_size=8, output_shape=1, num_features=32, use_bias=False):  # Reducido num_features
+    super(OptimizedVGGArch, self).__init__()
+    conv = partial(
+        tf.keras.layers.Conv2D,
+        kernel_size=[3, 3], use_bias=use_bias, padding="same")
+    batch_norm = partial(tf.keras.layers.BatchNormalization)
+    
+    self._lrelu = tf.keras.layers.LeakyReLU(alpha=0.2)
+    self._dense_1 = tf.keras.layers.Dense(50)  # Reducido de 100 a 50
+    self._dense_2 = tf.keras.layers.Dense(output_shape)
+    self._conv_layers = OrderedDict()
+    self._batch_norm = OrderedDict()
+    
+    # Añadir downsampling inicial para reducir resolución rápidamente
+    self._initial_downsample = tf.keras.layers.AveragePooling2D(pool_size=2, strides=2)
+    
+    self._conv_layers["conv_0_0"] = conv(filters=num_features, strides=1)
+    self._conv_layers["conv_0_1"] = conv(filters=num_features, strides=2)
+    self._batch_norm["bn_0_1"] = batch_norm()
+    
+    # Reducir número de capas
+    for i in range(1, 3):  # Reducido de 4 a 3
+      for j in range(1, 3):
+        self._conv_layers["conv_%d_%d" % (i, j)] = conv(
+            filters=num_features * (2**i), strides=j)
+        self._batch_norm["bn_%d_%d" % (i, j)] = batch_norm()
+
+  def call(self, inputs, training=None):
+    return self.unsigned_call(inputs)
+    
+  def unsigned_call(self, input_):
+    # Downsample inicialmente para reducir memoria
+    input_ = self._initial_downsample(input_)
+    
+    features = self._lrelu(self._conv_layers["conv_0_0"](input_))
+    features = self._lrelu(
+        self._batch_norm["bn_0_1"](
+            self._conv_layers["conv_0_1"](features)))
+    
+    # VGG Trunk reducido
+    for i in range(1, 3):  # Reducido
+      for j in range(1, 3):
+        features = self._lrelu(
+            self._batch_norm["bn_%d_%d" % (i, j)](
+                self._conv_layers["conv_%d_%d" % (i, j)](features)))
+
+    flattened = tf.keras.layers.Flatten()(features)
+    dense = self._lrelu(self._dense_1(flattened))
+    out = self._dense_2(dense)
+    return out
