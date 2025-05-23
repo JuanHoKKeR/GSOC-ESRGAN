@@ -117,7 +117,7 @@ def load_trained_esrgan(checkpoint_path):
     generator = RRDBNet(out_channel=3)
     
     # Inicializar el modelo con una entrada dummy
-    dummy_input = tf.random.normal([1, 128, 128, 3])
+    dummy_input = tf.random.normal([1, 64, 64, 3])
     generator(dummy_input)
     
     # Crear checkpoint y restaurar

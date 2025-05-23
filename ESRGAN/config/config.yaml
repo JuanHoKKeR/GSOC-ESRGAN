@@ -1,15 +1,16 @@
 RDB:
   residual_scale_beta: 0.2
-batch_size: 8
+batch_size: 16
 checkpoint_path:
   phase_1: checkpoints/phase_1
   phase_2: checkpoints/phase_2
 dataset:
-  hr_dimension: 512
+  hr_dimension: 256
+  lr_dimension: 64
   name: Microscopy
   scale_method: bicubic
 interpolation_parameter: 0.8
-print_step: 100
+print_step: 75
 train_combined:
   adam:
     beta_1: 0.9
@@ -19,13 +20,14 @@ train_combined:
       step:
       - 2000
       - 6000
-      - 10000
-      - 15000
-      - 25000
+      - 12000
+      - 20000
+      - 30000
+    discriminator_lr: 5.0e-06
     initial_lr: 2.0e-05
   eta: 0.01
   lambda: 0.005
-  num_steps: 50000
+  num_steps: 35000
   perceptual_loss_type: L1
 train_psnr:
   adam:
@@ -34,5 +36,5 @@ train_psnr:
     decay:
       factor: 0.5
       step: 30000
-    initial_lr: 0.0002
-  num_steps: 100000
+    initial_lr: 0.0003
+  num_steps: 60000

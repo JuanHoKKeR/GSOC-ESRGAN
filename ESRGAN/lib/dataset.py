@@ -396,11 +396,11 @@ def load_dataset_from_meta_info(
         base_path="",
         transforms=None,
         batch_size=16,
-        buffer_size=1000,
+        buffer_size=2200,
         repeat=True,
         shuffle=True,
-        lr_size=(128, 128),
-        hr_size=(512, 512)):
+        lr_size=(64, 64),
+        hr_size=(256, 256)):
     """Carga datos desde archivos meta_info que contienen rutas de imágenes.
     
     Args:

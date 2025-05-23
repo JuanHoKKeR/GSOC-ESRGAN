@@ -77,7 +77,7 @@ class CustomTrainer(train.Trainer):
         
         # Obtener dimensiones de la configuración
         dataset_args = self.settings.get("dataset", {})
-        self.hr_dimension = dataset_args.get("hr_dimension", 512)
+        self.hr_dimension = dataset_args.get("hr_dimension", 256)
         lr_dimension = self.hr_dimension // 4  # Factor de escala por defecto es 4
         
         # Comprobar que los archivos existen
@@ -157,7 +157,7 @@ def main():
     parser.add_argument(
         "--wandb_project",
         default="esrgan-microscopy",
-        help="Nombre del proyecto en wandb (default: esrgan-microscopy)")
+        help="Nombre del proyecto en wandb (default: esrgan-microscopy-64to256)")
     parser.add_argument(
         "--wandb_entity",
         default=None,
@@ -259,7 +259,7 @@ def main():
         # Inicializar los parámetros del modelo - usar método call compatible con TF 2.11
         logging.info("Inicializando parámetros del generador...")
         # Usar el método call estándar en lugar de unsigned_call
-        generator(tf.random.normal([1, 128, 128, 3]), training=True)
+        generator(tf.random.normal([1, 64, 64, 3]), training=True)
 
         # Cargar pesos preentrenados si se proporcionó la ruta
         if args.pretrained_model and os.path.exists(args.pretrained_model):
@@ -326,7 +326,7 @@ def main():
         logging.info("Guardando modelo interpolado")
         try:
             # Obtener dimensiones de la configuración o usar valores predeterminados
-            hr_dim = sett.get("dataset", {}).get("hr_dimension", 512)
+            hr_dim = sett.get("dataset", {}).get("hr_dimension", 256)
             # Usar dimensions proporcionadas por la configuración
             interp_param = sett.get("interpolation_parameter", 0.8)
             

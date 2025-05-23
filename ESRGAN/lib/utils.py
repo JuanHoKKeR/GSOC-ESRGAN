@@ -398,7 +398,7 @@ def load_pretrained_generator(generator, pretrained_path):
     try:
         # Asegurarse de que el generador está inicializado
         if not generator.built:
-            dummy_input = tf.random.normal([1, 128, 128, 3])
+            dummy_input = tf.random.normal([1, 64, 64, 3])
             generator(dummy_input)
             logging.info("Inicializado generador con pesos aleatorios")
         
@@ -460,7 +460,7 @@ def load_pretrained_generator(generator, pretrained_path):
         logging.info(f"Se transfirieron {transferred_count} variables de {len(generator.variables)}")
         
         # Validar que la carga funcionó
-        test_input = tf.random.normal([1, 128, 128, 3])
+        test_input = tf.random.normal([1, 64, 64, 3])
         test_output = generator(test_input)
         logging.info(f"Prueba de inferencia exitosa. Forma de salida: {test_output.shape}")
         
