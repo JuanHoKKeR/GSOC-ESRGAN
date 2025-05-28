@@ -396,11 +396,12 @@ def load_dataset_from_meta_info(
         base_path="",
         transforms=None,
         batch_size=16,
-        buffer_size=2200,
+        buffer_size=8000,
         repeat=True,
         shuffle=True,
-        lr_size=(64, 64),
-        hr_size=(256, 256)):
+        lr_size=(128, 128),
+        hr_size=(256, 256),
+        num_parallel_calls=16):
     """Carga datos desde archivos meta_info que contienen rutas de imágenes.
     
     Args:
@@ -475,9 +476,16 @@ def load_dataset_from_meta_info(
             # Verificar que la imagen tiene al menos 3 canales
             if img.shape[-1] != 3:
                 img = tf.image.grayscale_to_rgb(img)
-                
-            # Redimensionar a lr_size
-            img = tf.image.resize(img, lr_size, method='bicubic')
+
+            current_shape = tf.shape(img)[:2]
+            target_shape = tf.constant(lr_size, dtype=tf.int32)
+            need_resize = tf.reduce_any(tf.not_equal(current_shape, target_shape))
+
+            img = tf.cond(
+                need_resize,
+                lambda: tf.image.resize(img, lr_size, method='bicubic'),
+                lambda: img  # Sin redimensionamiento innecesario
+            )
             
             # Clip values between 0-255
             return tf.clip_by_value(img, 0, 255)
@@ -506,9 +514,16 @@ def load_dataset_from_meta_info(
             # Verificar que la imagen tiene al menos 3 canales
             if img.shape[-1] != 3:
                 img = tf.image.grayscale_to_rgb(img)
-                
-            # Redimensionar a hr_size
-            img = tf.image.resize(img, hr_size, method='bicubic')
+
+            current_shape = tf.shape(img)[:2]
+            target_shape = tf.constant(hr_size, dtype=tf.int32)
+            need_resize = tf.reduce_any(tf.not_equal(current_shape, target_shape))
+
+            img = tf.cond(
+                need_resize,
+                lambda: tf.image.resize(img, hr_size, method='bicubic'),
+                lambda: img  # Sin redimensionamiento innecesario
+            )
             
             # Clip values between 0-255
             return tf.clip_by_value(img, 0, 255)
@@ -517,19 +532,28 @@ def load_dataset_from_meta_info(
             return tf.zeros((*hr_size, 3), dtype=tf.float32)
     
     # Aplicar las funciones de carga
-    lr_ds = lr_ds.map(load_and_process_lr_image, 
-                      num_parallel_calls=tf.data.AUTOTUNE)  # Cambiado de experimental.AUTOTUNE a AUTOTUNE
-    hr_ds = hr_ds.map(load_and_process_hr_image,
-                      num_parallel_calls=tf.data.AUTOTUNE)  # Cambiado de experimental.AUTOTUNE a AUTOTUNE
-    
+    lr_ds = lr_ds.map(
+        load_and_process_lr_image, 
+        num_parallel_calls=num_parallel_calls,  # Usar 16 en lugar de AUTOTUNE
+        deterministic=True
+    )
+    hr_ds = hr_ds.map(
+        load_and_process_hr_image,
+        num_parallel_calls=num_parallel_calls,  # Usar 16 en lugar de AUTOTUNE
+        deterministic=True
+    )
     # Combinar datasets
     dataset = tf.data.Dataset.zip((lr_ds, hr_ds))
     
     # Aplicar transformaciones adicionales si se proporcionan
     if transforms:
-        dataset = dataset.map(transforms, 
-                             num_parallel_calls=tf.data.AUTOTUNE)  # Cambiado de experimental.AUTOTUNE a AUTOTUNE
-    
+        dataset = dataset.map(
+            transforms, 
+            num_parallel_calls=num_parallel_calls,  # ✅ CAMBIAR
+            deterministic=True
+        )
+    dataset = dataset.prefetch(buffer_size // 4)
+
     # Configurar dataset
     if shuffle:
         dataset = dataset.shuffle(buffer_size, reshuffle_each_iteration=True)
@@ -541,3 +565,4 @@ def load_dataset_from_meta_info(
     dataset = dataset.prefetch(tf.data.AUTOTUNE)  # Cambiado de experimental.AUTOTUNE a AUTOTUNE
     
     return dataset
+

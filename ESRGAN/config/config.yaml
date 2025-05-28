@@ -6,11 +6,11 @@ checkpoint_path:
   phase_2: checkpoints/phase_2
 dataset:
   hr_dimension: 256
-  lr_dimension: 64
+  lr_dimension: 128
   name: Microscopy
   scale_method: bicubic
 interpolation_parameter: 0.8
-print_step: 75
+print_step: 100
 train_combined:
   adam:
     beta_1: 0.9
@@ -20,14 +20,14 @@ train_combined:
       step:
       - 2000
       - 6000
-      - 12000
-      - 20000
-      - 30000
+      - 10000
+      - 15000
+      - 25000
     discriminator_lr: 5.0e-06
     initial_lr: 2.0e-05
   eta: 0.01
   lambda: 0.005
-  num_steps: 35000
+  num_steps: 50000
   perceptual_loss_type: L1
 train_psnr:
   adam:

@@ -28,6 +28,10 @@ else:
     for device in physical_devices:
         try:
             tf.config.experimental.set_memory_growth(device, True)
+            tf.config.experimental.set_virtual_device_configuration(
+                device,
+                [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=None)]
+            )
         except Exception as e:
             print(f"Error al configurar memory growth: {e}")
 
@@ -37,6 +41,25 @@ try:
 except ImportError:
     WANDB_AVAILABLE = False
     logging.warning("Wandb no está disponible. Continuando sin tracking.")
+
+def configure_performance():
+    """Configura TensorFlow para máximo rendimiento con tu hardware"""
+    
+    # ✅ USAR TODOS LOS 16 THREADS DEL CPU
+    tf.config.threading.set_intra_op_parallelism_threads(16)  # Operaciones dentro de ops
+    tf.config.threading.set_inter_op_parallelism_threads(8)   # Operaciones entre ops
+    
+    # ✅ CONFIGURAR GPU PARA MÁXIMO RENDIMIENTO
+    physical_devices = tf.config.list_physical_devices('GPU')
+    if physical_devices:
+        for device in physical_devices:
+            tf.config.experimental.set_memory_growth(device, True)
+            # Permitir ejecución asíncrona
+            tf.config.experimental.set_synchronous_execution(False)
+    
+    # ✅ HABILITAR XLA (compilación optimizada)
+    tf.config.optimizer.set_jit(True)
+    
 
 class CustomTrainer(train.Trainer):
     """Trainer personalizado para usar con archivos meta_info."""
@@ -78,7 +101,7 @@ class CustomTrainer(train.Trainer):
         # Obtener dimensiones de la configuración
         dataset_args = self.settings.get("dataset", {})
         self.hr_dimension = dataset_args.get("hr_dimension", 256)
-        lr_dimension = self.hr_dimension // 4  # Factor de escala por defecto es 4
+        self.lr_dimension = dataset_args.get("lr_dimension", 128)
         
         # Comprobar que los archivos existen
         for file_path in [hr_meta_file, lr_meta_file]:
@@ -97,8 +120,9 @@ class CustomTrainer(train.Trainer):
                 base_path=base_path,
                 batch_size=self.batch_size,
                 shuffle=True,
-                lr_size=(lr_dimension, lr_dimension),
-                hr_size=(self.hr_dimension, self.hr_dimension)
+                lr_size=(self.lr_dimension, self.lr_dimension),
+                hr_size=(self.hr_dimension, self.hr_dimension),
+                num_parallel_calls=16
             )
             
             # Verificar que el dataset está funcionando correctamente
@@ -116,6 +140,9 @@ class CustomTrainer(train.Trainer):
             raise
 
 def main():
+
+    configure_performance() 
+
     parser = argparse.ArgumentParser(description="Entrenar ESRGAN con imágenes de microscopía usando archivos meta_info y wandb")
     parser.add_argument(
         "--hr_meta_file",
@@ -157,7 +184,7 @@ def main():
     parser.add_argument(
         "--wandb_project",
         default="esrgan-microscopy",
-        help="Nombre del proyecto en wandb (default: esrgan-microscopy-64to256)")
+        help="Nombre del proyecto en wandb (default: esrgan-microscopy-128to256)")
     parser.add_argument(
         "--wandb_entity",
         default=None,
@@ -327,6 +354,7 @@ def main():
         try:
             # Obtener dimensiones de la configuración o usar valores predeterminados
             hr_dim = sett.get("dataset", {}).get("hr_dimension", 256)
+            lr_dim = sett.get("dataset", {}).get("lr_dimension", 128)
             # Usar dimensions proporcionadas por la configuración
             interp_param = sett.get("interpolation_parameter", 0.8)
             

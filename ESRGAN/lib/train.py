@@ -112,6 +112,7 @@ class Trainer(object):
       generator: Model Object for the Generator
     """
     # Loading up phase parameters
+    tf.config.run_functions_eagerly(False)
     warmup_num_iter = self.settings.get("warmup_num_iter", None)
     phase_args = self.settings["train_psnr"]
     decay_params = phase_args["adam"]["decay"]
@@ -139,6 +140,7 @@ class Trainer(object):
     start_time = time.time()
     # Training starts
 
+    @tf.function(experimental_relax_shapes=True)  
     def _step_fn(**kwargs):
       image_lr = kwargs["image_lr"]
       image_hr = kwargs["image_hr"]
@@ -289,7 +291,7 @@ class Trainer(object):
                 # Registrar imágenes
                 wandb.log({
                     "phase1/samples": [
-                        wandb.Image(sample_lr, caption="Low Resolution (64x64→256x256)"),
+                        wandb.Image(sample_lr, caption="Low Resolution (128x128→256x256)"),
                         wandb.Image(sample_fake, caption="Generated (256x256)"),
                         wandb.Image(sample_hr, caption="High Resolution (256x256)")
                     ],
@@ -332,6 +334,7 @@ class Trainer(object):
           generator: Model object for the Generator
           discriminator: Model object for the Discriminator
     """
+    tf.config.run_functions_eagerly(False)
     phase_args = self.settings["train_combined"]
     decay_args = phase_args["adam"]["decay"]
     decay_factor = decay_args["factor"]
@@ -399,6 +402,7 @@ class Trainer(object):
         loss_type=phase_args["perceptual_loss_type"])
     logging.debug("Loaded Perceptual Model")
     
+    @tf.function(experimental_relax_shapes=True)  
     def _step_fn(**kwargs):
       image_lr = kwargs["image_lr"]
       image_hr = kwargs["image_hr"]
@@ -615,7 +619,7 @@ class Trainer(object):
                 # Registrar imágenes en wandb
                 wandb.log({
                     "phase2/samples": [
-                        wandb.Image(sample_lr_vis, caption="Low Resolution (64x64→256x256)"),
+                        wandb.Image(sample_lr_vis, caption="Low Resolution (128x128→256x256)"),
                         wandb.Image(sample_fake_vis, caption="Generated (256x256)"),
                         wandb.Image(sample_hr_vis, caption="High Resolution (256x256)")
                     ],

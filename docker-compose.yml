@@ -8,8 +8,8 @@ services:
     volumes:
       - ./ESRGAN:/workspace
       - /media/adalab/Bodega/JuanCruz/Microscopy:/media/adalab/Bodega/JuanCruz/Microscopy
-      - ./logs:/workspace/logs
-      - ./model:/workspace/model
+      - ./ESRGAN/logs:/workspace/logs
+      - ./ESRGAN/model:/workspace/model
       - ./cache:/workspace/cache
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
