@@ -6,16 +6,15 @@ import tensorflow as tf
 from lib.dataset import load_dataset_from_meta_info
 from lib import settings, train, model, utils
 
-
 # Usar la nueva API de precisión mixta para TF 2.11
-#try:
-#    from tensorflow.keras import mixed_precision
-#    mixed_precision.set_global_policy('mixed_float16')
-#    policy = mixed_precision.global_policy()
-#    print(f"Mixed precision activada: {policy}")
-#except Exception as e:
-#    print(f"Error al configurar mixed precision: {e}")
-#    print("Continuando sin mixed precision...")
+try:
+    from tensorflow.keras import mixed_precision
+    mixed_precision.set_global_policy('mixed_float16')
+    policy = mixed_precision.global_policy()
+    print(f"Mixed precision activada: {policy}")
+except Exception as e:
+    print(f"Error al configurar mixed precision: {e}")
+    print("Continuando sin mixed precision...")
 
 # Comprobar que la GPU está disponible
 physical_devices = tf.config.list_physical_devices('GPU')
@@ -54,12 +53,23 @@ def configure_performance():
     if physical_devices:
         for device in physical_devices:
             tf.config.experimental.set_memory_growth(device, True)
-            # Permitir ejecución asíncrona
-            tf.config.experimental.set_synchronous_execution(False)
     
-    # ✅ HABILITAR XLA (compilación optimizada)
-    tf.config.optimizer.set_jit(True)
-    
+def update_config_batch_size(config_path, new_batch_size):
+    """Actualiza el batch size en el archivo de configuración"""
+    try:
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        
+        config["batch_size"] = new_batch_size
+        
+        with open(config_path, 'w') as f:
+            yaml.dump(config, f, default_flow_style=False)
+            
+        logging.info(f"✅ Batch size actualizado a {new_batch_size} en {config_path}")
+        return True
+    except Exception as e:
+        logging.error(f"❌ Error al actualizar configuración: {e}")
+        return False
 
 class CustomTrainer(train.Trainer):
     """Trainer personalizado para usar con archivos meta_info."""
@@ -74,7 +84,9 @@ class CustomTrainer(train.Trainer):
             lr_meta_file=None,
             base_path="",
             strategy=None,
-            use_wandb=False):
+            use_wandb=False,
+            config_path=None):
+        
         """Inicializa el entrenador personalizado para dataset de microscopía.
         
         Args:
@@ -88,7 +100,6 @@ class CustomTrainer(train.Trainer):
             strategy: Estrategia de distribución (None o SingleDeviceStrategy)
             use_wandb: Si se debe usar Weights & Biases
         """
-        # No llamamos a super().__init__ porque queremos reemplazar completamente
         # la inicialización del dataset, pero tomamos los demás parámetros.
         self.settings = settings
         self.model_dir = model_dir
@@ -97,27 +108,35 @@ class CustomTrainer(train.Trainer):
         self.strategy = strategy if strategy is not None else utils.SingleDeviceStrategy()
         self.use_wandb = use_wandb and WANDB_AVAILABLE
         self.batch_size = self.settings["batch_size"]
+        self.config_path = config_path
         
         # Obtener dimensiones de la configuración
         dataset_args = self.settings.get("dataset", {})
         self.hr_dimension = dataset_args.get("hr_dimension", 256)
         self.lr_dimension = dataset_args.get("lr_dimension", 128)
+
+        self.hr_meta_file = hr_meta_file
+        self.lr_meta_file = lr_meta_file
+        self.base_path = base_path
         
         # Comprobar que los archivos existen
         for file_path in [hr_meta_file, lr_meta_file]:
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"No se encuentra el archivo {file_path}")
-        
+            
+        self._load_dataset()
+
+    def _load_dataset(self):
         logging.info(f"Cargando dataset desde meta_info...")
-        logging.info(f"HR meta: {hr_meta_file}")
-        logging.info(f"LR meta: {lr_meta_file}")
+        logging.info(f"HR meta: {self.hr_meta_file}")
+        logging.info(f"LR meta: {self.lr_meta_file}")
         
         # Cargar el dataset desde los archivos meta_info
         try:
             dataset_iter = load_dataset_from_meta_info(
-                hr_meta_file=hr_meta_file,
-                lr_meta_file=lr_meta_file,
-                base_path=base_path,
+                hr_meta_file=self.hr_meta_file,
+                lr_meta_file=self.lr_meta_file,
+                base_path=self.base_path,
                 batch_size=self.batch_size,
                 shuffle=True,
                 lr_size=(self.lr_dimension, self.lr_dimension),
@@ -138,6 +157,117 @@ class CustomTrainer(train.Trainer):
         except Exception as e:
             logging.error(f"Error al cargar el dataset: {e}")
             raise
+
+
+    def smart_train_gan(self, generator, discriminator):
+        """Entrena la fase GAN con ajuste automático de batch size"""
+        max_attempts = 3
+        original_batch_size = self.batch_size
+        
+        for attempt in range(max_attempts):
+            try:
+                current_batch_size = original_batch_size // (2 ** attempt)
+                
+                if current_batch_size < 2:
+                    logging.error("❌ Batch size demasiado pequeño, abortando")
+                    raise RuntimeError("No se puede reducir más el batch size")
+                
+                if attempt > 0:
+                    logging.info(f"🔄 Intento {attempt + 1}: Reduciendo batch size a {current_batch_size}")
+                    
+                    # Actualizar configuración
+                    if self.config_path and update_config_batch_size(self.config_path, current_batch_size):
+                        # Recargar configuración
+                        self.settings = settings.Settings(self.config_path)
+                        self.batch_size = current_batch_size
+                        
+                        # Recargar dataset con nuevo batch size
+                        self._load_dataset()
+                
+                # Intentar entrenar
+                logging.info(f"🚀 Iniciando fase 2 con batch size {current_batch_size}")
+                self.train_gan(generator, discriminator)
+                
+                # Si llegamos aquí, fue exitoso
+                if attempt > 0:
+                    logging.info(f"✅ Fase 2 completada exitosamente con batch size {current_batch_size}")
+                return
+                
+            # 🔧 CORRECCIÓN CRÍTICA: Mejorar detección de errores de memoria
+            except Exception as e:
+                error_msg = str(e).lower()
+                error_type = type(e).__name__
+                
+                # Detectar errores de memoria por múltiples criterios
+                is_memory_error = (
+                    "out of memory" in error_msg or 
+                    "resource exhausted" in error_msg or
+                    "oom when allocating" in error_msg or
+                    "resourceexhaustederror" in error_type.lower() or
+                    "internal error" in error_msg
+                )
+                
+                if is_memory_error:
+                    logging.warning(f"⚠️  Error de memoria detectado en intento {attempt + 1}")
+                    logging.warning(f"    Tipo de error: {error_type}")
+                    logging.warning(f"    Mensaje: {str(e)[:200]}...")
+                    
+                    if attempt < max_attempts - 1:
+                        logging.info("🔄 Reintentando con batch size menor...")
+                        continue
+                    else:
+                        logging.error("❌ Agotados todos los intentos de reducir batch size")
+                        raise
+                else:
+                    # Si no es error de memoria, re-lanzar inmediatamente
+                    logging.error(f"❌ Error no relacionado con memoria: {error_type}")
+                    logging.error(f"    Mensaje: {str(e)[:200]}...")
+                    raise
+        
+        raise RuntimeError("No se pudo completar el entrenamiento de fase 2")
+
+def create_discriminator(config, batch_size, kimianet_weights_override=None):
+    """🆕 Crea el discriminador según la configuración"""
+    
+    # Obtener configuración del discriminador
+    discriminator_config = config.get("discriminator", {})
+    discriminator_type = discriminator_config.get("type", "densenet").lower()
+    
+    # Determinar ruta de pesos KimiaNet
+    kimianet_weights_path = None
+    if kimianet_weights_override:
+        # Prioridad 1: Argumento de línea de comandos
+        kimianet_weights_path = kimianet_weights_override
+        logging.info(f"🎯 Usando pesos KimiaNet del argumento: {kimianet_weights_path}")
+    elif discriminator_config.get("kimianet_weights"):
+        # Prioridad 2: Config YAML
+        kimianet_weights_path = discriminator_config.get("kimianet_weights")
+        logging.info(f"🎯 Usando pesos KimiaNet del config: {kimianet_weights_path}")
+    
+    # Verificar si el archivo existe
+    if kimianet_weights_path and not os.path.exists(kimianet_weights_path):
+        logging.warning(f"⚠️  No se encontró el archivo de pesos KimiaNet en {kimianet_weights_path}")
+        kimianet_weights_path = None
+    
+    # Crear el discriminador según el tipo
+    if discriminator_type == "densenet":
+        logging.info("🏗️  Creando DenseNetDiscriminator con KimiaNet")
+        return model.DenseNetDiscriminator(kimianet_weights_path=kimianet_weights_path)
+    
+    elif discriminator_type == "vgg":
+        num_features = discriminator_config.get("num_features", 64)
+        logging.info(f"🏗️  Creando VGGArch con {num_features} features")
+        return model.VGGArch(batch_size=batch_size, num_features=num_features)
+    
+    elif discriminator_type == "optimized_vgg":
+        num_features = discriminator_config.get("num_features", 32)
+        logging.info(f"🏗️  Creando OptimizedVGGArch con {num_features} features")
+        return model.OptimizedVGGArch(batch_size=batch_size, num_features=num_features)
+    
+    else:
+        logging.error(f"❌ Tipo de discriminador desconocido: {discriminator_type}")
+        raise ValueError(f"Tipo de discriminador '{discriminator_type}' no soportado. Usa: 'densenet', 'vgg', o 'optimized_vgg'")
+
 
 def main():
 
@@ -171,8 +301,8 @@ def main():
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=16,
-        help="Tamaño de batch (default: 16)")
+        default=None,
+        help="Tamaño de batch inicial (si no se especifica, se usa el del config)")
     parser.add_argument(
         "--kimianet_weights",
         default=None,
@@ -184,7 +314,7 @@ def main():
     parser.add_argument(
         "--wandb_project",
         default="esrgan-microscopy",
-        help="Nombre del proyecto en wandb (default: esrgan-microscopy-128to256)")
+        help="Nombre del proyecto en wandb (default: esrgan-microscopy-68to124)")
     parser.add_argument(
         "--wandb_entity",
         default=None,
@@ -219,27 +349,6 @@ def main():
     for directory in [args.model_dir, args.log_dir]:
         os.makedirs(directory, exist_ok=True)
     
-    # Configurar wandb
-    use_wandb = False
-    if not args.no_wandb and WANDB_AVAILABLE:
-        try:
-            wandb.init(
-                project=args.wandb_project,
-                entity=args.wandb_entity,
-                name=args.wandb_name,
-                config={
-                    "batch_size": args.batch_size,
-                    "hr_meta_file": args.hr_meta_file,
-                    "lr_meta_file": args.lr_meta_file,
-                    "phase": args.phase
-                }
-            )
-            use_wandb = True
-            logging.info("Weights & Biases inicializado correctamente")
-        except Exception as e:
-            logging.error(f"Error al inicializar Weights & Biases: {e}")
-            logging.info("Continuando sin tracking de Weights & Biases")
-    
     # Cargar y actualizar configuración
     if not os.path.exists(args.config):
         logging.error(f"Archivo de configuración {args.config} no encontrado")
@@ -247,9 +356,12 @@ def main():
         
     with open(args.config, 'r') as f:
         config = yaml.safe_load(f)
-    
-    # Actualizar configuración con batch_size
-    config["batch_size"] = args.batch_size
+
+    if args.batch_size:
+        config["batch_size"] = args.batch_size
+        logging.info(f"Usando batch size del argumento: {args.batch_size}")
+    else:
+        logging.info(f"Usando batch size del config: {config.get('batch_size', 16)}")
     
     # Guardar configuración actualizada
     config_dir = os.path.dirname(args.config)
@@ -261,6 +373,38 @@ def main():
     
     # Cargar configuración
     sett = settings.Settings(args.config)
+
+    dataset_config = sett.get("dataset", {})
+    lr_dim = dataset_config.get("lr_dimension", 128)
+    hr_dim = dataset_config.get("hr_dimension", 256)
+    
+    logging.info(f"🎯 Configuración automática:")
+    logging.info(f"   - LR dimension: {lr_dim}x{lr_dim}")
+    logging.info(f"   - HR dimension: {hr_dim}x{hr_dim}")
+    logging.info(f"   - Batch size inicial: {sett['batch_size']}")
+
+    # Configurar wandb
+    use_wandb = False
+    if not args.no_wandb and WANDB_AVAILABLE:
+        try:
+            wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                name=args.wandb_name,
+                config={
+                    "batch_size": sett["batch_size"],
+                    "lr_dimension": lr_dim,
+                    "hr_dimension": hr_dim,
+                    "hr_meta_file": args.hr_meta_file,
+                    "lr_meta_file": args.lr_meta_file,
+                    "phase": args.phase
+                }
+            )
+            use_wandb = True
+            logging.info("Weights & Biases inicializado correctamente")
+        except Exception as e:
+            logging.error(f"Error al inicializar Weights & Biases: {e}")
+            logging.info("Continuando sin tracking de Weights & Biases")
     
     # Configurar strategy para GPU
     strategy = utils.SingleDeviceStrategy()
@@ -273,20 +417,28 @@ def main():
     logging.info("Inicializando modelos...")
     try:
         # Usar ruta de pesos KimiaNet si se proporciona, sino None
-        kimianet_weights_path = args.kimianet_weights
-        if kimianet_weights_path and not os.path.exists(kimianet_weights_path):
-            logging.warning(f"No se encontró el archivo de pesos KimiaNet en {kimianet_weights_path}. Se usará sin pesos preentrenados.")
-            kimianet_weights_path = None
+        discriminator = create_discriminator(
+            config=config,
+            batch_size=sett["batch_size"],
+            kimianet_weights_override=args.kimianet_weights
+        )
+
+        #kimianet_weights_path = args.kimianet_weights
+        #if kimianet_weights_path and not os.path.exists(kimianet_weights_path):
+        #    logging.warning(f"No se encontró el archivo de pesos KimiaNet en {kimianet_weights_path}. Se usará sin pesos preentrenados.")
+        #    kimianet_weights_path = None
             
-        discriminator = model.DenseNetDiscriminator(kimianet_weights_path=kimianet_weights_path)
+        #discriminator = model.DenseNetDiscriminator(kimianet_weights_path=kimianet_weights_path)
         #discriminator = model.VGGArch(batch_size=sett["batch_size"], num_features=64)
         #discriminator = model.OptimizedVGGArch(batch_size=sett["batch_size"], num_features=32)
         generator = model.RRDBNet(out_channel=3)
         
         # Inicializar los parámetros del modelo - usar método call compatible con TF 2.11
         logging.info("Inicializando parámetros del generador...")
-        # Usar el método call estándar en lugar de unsigned_call
-        generator(tf.random.normal([1, 64, 64, 3]), training=True)
+        
+        dummy_input_shape = [1, lr_dim, lr_dim, 3]  # Ajuste acorde a lr_dim del config
+        generator(tf.random.normal(dummy_input_shape), training=True)  #Ajustar acorde a las dimensiones de entrada esperadas
+        logging.info(f"Generador inicializado con entrada {dummy_input_shape}")
 
         # Cargar pesos preentrenados si se proporcionó la ruta
         if args.pretrained_model and os.path.exists(args.pretrained_model):
@@ -315,8 +467,11 @@ def main():
             lr_meta_file=args.lr_meta_file,
             base_path=args.base_path,
             strategy=strategy,
-            use_wandb=use_wandb
+            use_wandb=use_wandb,
+            config_path=args.config
         )
+
+
         logging.info("Trainer creado correctamente")
     except Exception as e:
         logging.error(f"Error al crear el trainer: {e}")
@@ -341,7 +496,8 @@ def main():
     if "phase2" in phases:
         logging.info("Iniciando fase 2 (GAN)")
         try:
-            trainer.train_gan(generator, discriminator)
+            trainer.smart_train_gan(generator, discriminator)
+            #trainer.train_gan(generator, discriminator)
             stats["train_step_2"] = True
             logging.info("Fase 2 completada")
         except Exception as e:
@@ -353,8 +509,8 @@ def main():
         logging.info("Guardando modelo interpolado")
         try:
             # Obtener dimensiones de la configuración o usar valores predeterminados
-            hr_dim = sett.get("dataset", {}).get("hr_dimension", 256)
-            lr_dim = sett.get("dataset", {}).get("lr_dimension", 128)
+            # = sett.get("dataset", {}).get("hr_dimension", 256)
+            #lr_dim = sett.get("dataset", {}).get("lr_dimension", 128)
             # Usar dimensions proporcionadas por la configuración
             interp_param = sett.get("interpolation_parameter", 0.8)
             

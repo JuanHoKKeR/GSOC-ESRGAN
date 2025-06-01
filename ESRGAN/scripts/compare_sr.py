@@ -90,7 +90,7 @@ class RRDBNet(tf.keras.Model):
         self.conv_trunk = conv(filters=num_features)
         # Upsample
         self.upsample1 = conv_transpose(num_features)
-        self.upsample2 = conv_transpose(num_features)
+        #self.upsample2 = conv_transpose(num_features) #X4
         self.conv_last_1 = conv(num_features)
         self.conv_last_2 = conv(out_channel)
         self.lrelu = tf.keras.layers.LeakyReLU(alpha=0.2)
@@ -103,7 +103,7 @@ class RRDBNet(tf.keras.Model):
         trunk = self.conv_trunk(self.rdb_trunk(feature))
         feature = trunk + feature
         feature = self.lrelu(self.upsample1(feature))
-        feature = self.lrelu(self.upsample2(feature))
+        #feature = self.lrelu(self.upsample2(feature)) #X4
         feature = self.lrelu(self.conv_last_1(feature))
         out = self.conv_last_2(feature)
         return out
@@ -117,7 +117,7 @@ def load_trained_esrgan(checkpoint_path):
     generator = RRDBNet(out_channel=3)
     
     # Inicializar el modelo con una entrada dummy
-    dummy_input = tf.random.normal([1, 64, 64, 3])
+    dummy_input = tf.random.normal([1, 128, 128, 3])
     generator(dummy_input)
     
     # Crear checkpoint y restaurar
@@ -133,7 +133,7 @@ def load_trained_esrgan(checkpoint_path):
     return generator
 
 
-def bicubic_upscale(image, scale_factor=4):
+def bicubic_upscale(image, scale_factor=2):  #Modificado para escala x2
     """Aplica interpolación bicúbica para super-resolución"""
     if len(image.shape) == 4:  # Batch dimension
         image = tf.squeeze(image, 0)

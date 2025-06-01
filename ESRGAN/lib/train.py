@@ -46,12 +46,20 @@ class Trainer(object):
     dataset_args = self.settings["dataset"]
     augment_dataset = dataset.augment_image(saturation=None)
     self.batch_size = self.settings["batch_size"]
-    hr_size = tf.convert_to_tensor(
-        [dataset_args["hr_dimension"],
-         dataset_args["hr_dimension"], 3])
-    lr_size = tf.cast(hr_size, tf.float32) * \
-        tf.convert_to_tensor([1 / 4, 1 / 4, 1], tf.float32)
-    lr_size = tf.cast(lr_size, tf.int32)
+
+    self.hr_dimension = dataset_args.get("hr_dimension", 256)
+    self.lr_dimension = dataset_args.get("lr_dimension", 128)
+
+    self.scale_factor = self.hr_dimension // self.lr_dimension
+
+    logging.info(f"Configuración automática de dimensiones: ")
+    logging.info(f"  - Dimensión HR: {self.hr_dimension}")
+    logging.info(f"  - Dimensión LR: {self.lr_dimension}")
+    logging.info(f"  - Factor de escala: {self.scale_factor}")
+
+    hr_size = tf.convert_to_tensor([self.hr_dimension, self.hr_dimension, 3])
+    lr_size = tf.convert_to_tensor([self.lr_dimension, self.lr_dimension, 3])
+
     
     # Configurar el dataset según la estrategia
     if isinstance(strategy, tf.distribute.Strategy):
@@ -75,7 +83,8 @@ class Trainer(object):
       if not manual:
         scale_fn = dataset.scale_down(
                 method=dataset_args["scale_method"],
-                dimension=dataset_args["hr_dimension"])
+                dimension=self.hr_dimension,
+                factor=self.scale_factor)
         
         self.dataset = dataset.load_dataset(
             dataset_args["name"],
@@ -89,7 +98,8 @@ class Trainer(object):
       else:
         scale_fn = dataset.scale_down(
                 method=dataset_args["scale_method"],
-                dimension=dataset_args["hr_dimension"])
+                dimension=self.hr_dimension,
+                factor=self.scale_factor)
                 
         self.dataset = dataset.load_dataset_directory(
             dataset_args["name"],
@@ -281,7 +291,7 @@ class Trainer(object):
                 # Generar imagen usando el generador
                 sample_fake = generator(tf.expand_dims(sample_lr, 0), training=False)[0]
 
-                sample_lr_resized = tf.image.resize(sample_lr, [256, 256], method='nearest')
+                sample_lr_resized = tf.image.resize(sample_lr, [self.hr_dimension, self.hr_dimension], method='nearest')
                 
                 # Convertir a formato adecuado para wandb
                 sample_lr = tf.cast(tf.clip_by_value(sample_lr_resized, 0, 255), tf.uint8).numpy()
@@ -291,9 +301,9 @@ class Trainer(object):
                 # Registrar imágenes
                 wandb.log({
                     "phase1/samples": [
-                        wandb.Image(sample_lr, caption="Low Resolution (128x128→256x256)"),
-                        wandb.Image(sample_fake, caption="Generated (256x256)"),
-                        wandb.Image(sample_hr, caption="High Resolution (256x256)")
+                        wandb.Image(sample_lr, caption=f"Low Resolution ({self.lr_dimension}x{self.lr_dimension}→{self.hr_dimension}x{self.hr_dimension})"),
+                        wandb.Image(sample_fake, caption=f"Generated ({self.hr_dimension}x{self.hr_dimension})"),
+                        wandb.Image(sample_hr, caption=f"High Resolution ({self.hr_dimension}x{self.hr_dimension})")
                     ],
                     "phase1/step": current_step,
                 })
@@ -610,7 +620,7 @@ class Trainer(object):
                     return img[..., ::-1] + mean if hasattr(img, 'numpy') else img
                 
 
-                sample_lr_resized = tf.image.resize(sample_lr, [256, 256], method='nearest')
+                sample_lr_resized = tf.image.resize(sample_lr, [self.hr_dimension, self.hr_dimension], method='nearest')
                 # Visualizar las imágenes
                 sample_lr_vis = tf.cast(tf.clip_by_value(sample_lr_resized, 0, 255), tf.uint8).numpy()
                 sample_hr_vis = tf.cast(tf.clip_by_value(sample_hr, 0, 255), tf.uint8).numpy()
@@ -619,9 +629,9 @@ class Trainer(object):
                 # Registrar imágenes en wandb
                 wandb.log({
                     "phase2/samples": [
-                        wandb.Image(sample_lr_vis, caption="Low Resolution (128x128→256x256)"),
-                        wandb.Image(sample_fake_vis, caption="Generated (256x256)"),
-                        wandb.Image(sample_hr_vis, caption="High Resolution (256x256)")
+                        wandb.Image(sample_lr_vis, caption=f"Low Resolution ({self.lr_dimension}x{self.lr_dimension}→{self.hr_dimension}x{self.hr_dimension})"),
+                        wandb.Image(sample_fake_vis, caption=f"Generated ({self.hr_dimension}x{self.hr_dimension})"),
+                        wandb.Image(sample_hr_vis, caption=f"High Resolution ({self.hr_dimension}x{self.hr_dimension})")
                     ],
                     "phase2/step": current_step,
                 })

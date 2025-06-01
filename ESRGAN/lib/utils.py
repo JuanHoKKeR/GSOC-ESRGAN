@@ -3,7 +3,7 @@ from functools import partial
 import tensorflow as tf
 from absl import logging
 from lib import settings
-from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.optimizers.legacy import Adam
 
 """ Utility functions needed for training ESRGAN model. """
 
@@ -366,10 +366,36 @@ def calculate_ssim(y_true, y_pred):
     return tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=255.0))
 
 def calculate_ms_ssim(y_true, y_pred):
-    """Calcula MS-SSIM entre la imagen real y la generada"""
+    """Calcula MS-SSIM entre la imagen real y la generada
+    
+    Para imágenes pequeñas (< 160x160), usa SSIM regular para evitar errores.
+    MS-SSIM requiere imágenes lo suficientemente grandes para múltiples escalas.
+    """
     y_true = tf.cast(y_true, tf.float32)
     y_pred = tf.cast(y_pred, tf.float32)
-    return tf.reduce_mean(tf.image.ssim_multiscale(y_true, y_pred, max_val=255.0))
+    
+    # Obtener las dimensiones de la imagen
+    shape = tf.shape(y_true)
+    height, width = shape[1], shape[2]
+    
+    # Si la imagen es muy pequeña, usar SSIM regular
+    min_dimension = tf.minimum(height, width)
+    use_regular_ssim = tf.less(min_dimension, 160)  # Umbral seguro para MS-SSIM
+    
+    def compute_ms_ssim():
+        """Calcula MS-SSIM para imágenes grandes"""
+        return tf.reduce_mean(tf.image.ssim_multiscale(y_true, y_pred, max_val=255.0))
+    
+    def compute_ssim():
+        """Calcula SSIM regular para imágenes pequeñas"""
+        return tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=255.0))
+    
+    # Condicional para elegir qué función usar
+    return tf.cond(
+        use_regular_ssim,
+        compute_ssim,      # Para imágenes pequeñas
+        compute_ms_ssim    # Para imágenes grandes
+    )
 
 def calculate_psnr(y_true, y_pred):
     """Calcula PSNR entre la imagen real y la generada"""

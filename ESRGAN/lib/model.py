@@ -58,7 +58,8 @@ class RRDBNet(tf.keras.Model):
     self.conv_trunk = conv(filters=num_features)
     # Upsample
     self.upsample1 = conv_transpose(num_features)
-    # self.upsample2 = conv_transpose(num_features) # Scale x4
+    #self.upsample2 = conv_transpose(num_features) # Scale x4
+    #self.upsample3 = conv_transpose(num_features) # Scale x8
     self.conv_last_1 = conv(num_features)
     self.conv_last_2 = conv(out_channel)
     self.lrelu = tf.keras.layers.LeakyReLU(alpha=0.2)
@@ -95,7 +96,8 @@ class RRDBNet(tf.keras.Model):
     feature = trunk + feature
     feature = self.lrelu(
             self.upsample1(feature))
-    # feature = self.lrelu(self.upsample2(feature)) # Scale x4
+    #feature = self.lrelu(self.upsample2(feature)) # Scale x4
+    #feature = self.lrelu(self.upsample3(feature)) # Scale x8
     feature = self.lrelu(self.conv_last_1(feature))
     out = self.conv_last_2(feature)
     return out
