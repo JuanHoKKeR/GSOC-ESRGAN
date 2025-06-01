@@ -7,14 +7,14 @@ from lib.dataset import load_dataset_from_meta_info
 from lib import settings, train, model, utils
 
 # Usar la nueva API de precisión mixta para TF 2.11
-try:
-    from tensorflow.keras import mixed_precision
-    mixed_precision.set_global_policy('mixed_float16')
-    policy = mixed_precision.global_policy()
-    print(f"Mixed precision activada: {policy}")
-except Exception as e:
-    print(f"Error al configurar mixed precision: {e}")
-    print("Continuando sin mixed precision...")
+#try:
+#    from tensorflow.keras import mixed_precision
+#    mixed_precision.set_global_policy('mixed_float16')
+#    policy = mixed_precision.global_policy()
+#    print(f"Mixed precision activada: {policy}")
+#except Exception as e:
+#    print(f"Error al configurar mixed precision: {e}")
+#    print("Continuando sin mixed precision...")
 
 # Comprobar que la GPU está disponible
 physical_devices = tf.config.list_physical_devices('GPU')
@@ -52,7 +52,13 @@ def configure_performance():
     physical_devices = tf.config.list_physical_devices('GPU')
     if physical_devices:
         for device in physical_devices:
-            tf.config.experimental.set_memory_growth(device, True)
+            try:
+                tf.config.experimental.set_memory_growth(device, True)
+            except Exception as e:
+                print(f"Error al configurar GPU: {e}")
+            
+            tf.config.experimental.enable_tensor_float_32_execution(False)
+
     
 def update_config_batch_size(config_path, new_batch_size):
     """Actualiza el batch size en el archivo de configuración"""
