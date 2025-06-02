@@ -174,7 +174,7 @@ class CustomTrainer(train.Trainer):
             try:
                 current_batch_size = original_batch_size // (2 ** attempt)
                 
-                if current_batch_size < 2:
+                if current_batch_size < 1:
                     logging.error("❌ Batch size demasiado pequeño, abortando")
                     raise RuntimeError("No se puede reducir más el batch size")
                 

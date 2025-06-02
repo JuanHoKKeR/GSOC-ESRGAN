@@ -33,9 +33,9 @@ class RRDBNet(tf.keras.Model):
   def __init__(
           self,
           out_channel,
-          num_features=32,
-          trunk_size=11,
-          growth_channel=32,
+          num_features=32, # Original 32  # Optimizado para 512->1024: 16
+          trunk_size=11, # Original 11 # Optimizado para 512->1024: 6
+          growth_channel=32, # Original 32 # Optimizado para 512->1024: 16
           use_bias=True,
           first_call=True):
     super(RRDBNet, self).__init__()
@@ -58,7 +58,7 @@ class RRDBNet(tf.keras.Model):
     self.conv_trunk = conv(filters=num_features)
     # Upsample
     self.upsample1 = conv_transpose(num_features)
-    #self.upsample2 = conv_transpose(num_features) # Scale x4
+    self.upsample2 = conv_transpose(num_features) # Scale x4
     #self.upsample3 = conv_transpose(num_features) # Scale x8
     self.conv_last_1 = conv(num_features)
     self.conv_last_2 = conv(out_channel)
@@ -96,7 +96,7 @@ class RRDBNet(tf.keras.Model):
     feature = trunk + feature
     feature = self.lrelu(
             self.upsample1(feature))
-    #feature = self.lrelu(self.upsample2(feature)) # Scale x4
+    feature = self.lrelu(self.upsample2(feature)) # Scale x4
     #feature = self.lrelu(self.upsample3(feature)) # Scale x8
     feature = self.lrelu(self.conv_last_1(feature))
     out = self.conv_last_2(feature)
