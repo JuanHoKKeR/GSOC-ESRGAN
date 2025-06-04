@@ -36,10 +36,11 @@ class RRDBNet(tf.keras.Model):
           num_features=32, # Original 32  # Optimizado para 512->1024: 16
           trunk_size=11, # Original 11 # Optimizado para 512->1024: 6
           growth_channel=32, # Original 32 # Optimizado para 512->1024: 16
+          upscale_factor=4,
           use_bias=True,
           first_call=True):
     super(RRDBNet, self).__init__()
-    self.rrdb_block = partial(utils.RRDB, growth_channel, first_call=first_call)
+    self.rrdb_block = partial(utils.RRDB, growth_channel=growth_channel, num_features=num_features, first_call=first_call)
     conv = partial(
         tf.keras.layers.Conv2D,
         kernel_size=[3, 3],
@@ -58,7 +59,16 @@ class RRDBNet(tf.keras.Model):
     self.conv_trunk = conv(filters=num_features)
     # Upsample
     self.upsample1 = conv_transpose(num_features)
-    self.upsample2 = conv_transpose(num_features) # Scale x4
+    if upscale_factor == 4:
+       self.upsample2 = conv_transpose(num_features) # Scale x4
+    elif upscale_factor == 8:
+       self.upsample2 = conv_transpose(num_features) # Scale x4
+       self.upsample3 = conv_transpose(num_features) # Scale x8
+    elif upscale_factor == 16:
+       self.upsample2 = conv_transpose(num_features) # Scale x4
+       self.upsample3 = conv_transpose(num_features) # Scale x8
+       self.upsample4 = conv_transpose(num_features) # Scale x16
+
     #self.upsample3 = conv_transpose(num_features) # Scale x8
     self.conv_last_1 = conv(num_features)
     self.conv_last_2 = conv(out_channel)
@@ -96,8 +106,13 @@ class RRDBNet(tf.keras.Model):
     feature = trunk + feature
     feature = self.lrelu(
             self.upsample1(feature))
-    feature = self.lrelu(self.upsample2(feature)) # Scale x4
-    #feature = self.lrelu(self.upsample3(feature)) # Scale x8
+    if hasattr(self, 'upsample2'):
+       feature = self.lrelu(self.upsample2(feature)) # Scale x4
+    if hasattr(self, 'upsample3'):
+       feature = self.lrelu(self.upsample3(feature)) # Scale x8
+    if hasattr(self, 'upsample4'):
+       feature = self.lrelu(self.upsample4(feature)) # Scale x16
+
     feature = self.lrelu(self.conv_last_1(feature))
     out = self.conv_last_2(feature)
     return out

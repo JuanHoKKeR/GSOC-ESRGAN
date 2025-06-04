@@ -300,21 +300,56 @@ class SingleDeviceStrategy(object):
 class RDB(tf.keras.layers.Layer):
   """ Residual Dense Block Layer """
 
-  def __init__(self, out_features=32, bias=True, first_call=True):
+  def __init__(self, growth_channel=32, num_features=32, bias=True, first_call=True):
     super(RDB, self).__init__()
-    _create_conv2d = partial(
-        tf.keras.layers.Conv2D,
-        out_features,
-        kernel_size=[3, 3],
-        kernel_initializer="he_normal",
-        bias_initializer="zeros",
-        strides=[1, 1], padding="same", use_bias=bias)
+    
     self._conv2d_layers = {
-        "conv_1": _create_conv2d(),
-        "conv_2": _create_conv2d(),
-        "conv_3": _create_conv2d(),
-        "conv_4": _create_conv2d(),
-        "conv_5": _create_conv2d()}
+        "conv_1": tf.keras.layers.Conv2D(
+            growth_channel,
+            kernel_size=[3, 3],
+            kernel_initializer="he_normal",
+            bias_initializer="zeros",
+            strides=[1, 1], 
+            padding="same", 
+            use_bias=bias),
+            
+        "conv_2": tf.keras.layers.Conv2D(
+            growth_channel,
+            kernel_size=[3, 3],
+            kernel_initializer="he_normal",
+            bias_initializer="zeros",
+            strides=[1, 1], 
+            padding="same", 
+            use_bias=bias),
+            
+        "conv_3": tf.keras.layers.Conv2D(
+            growth_channel,
+            kernel_size=[3, 3],
+            kernel_initializer="he_normal",
+            bias_initializer="zeros",
+            strides=[1, 1], 
+            padding="same", 
+            use_bias=bias),
+            
+        "conv_4": tf.keras.layers.Conv2D(
+            growth_channel,
+            kernel_size=[3, 3],
+            kernel_initializer="he_normal",
+            bias_initializer="zeros",
+            strides=[1, 1], 
+            padding="same", 
+            use_bias=bias),
+            
+        # 🔥 CRÍTICO: conv_5 debe producir num_features para residual
+        "conv_5": tf.keras.layers.Conv2D(
+            num_features,  # ← Para que coincida con input en residual
+            kernel_size=[3, 3],
+            kernel_initializer="he_normal",
+            bias_initializer="zeros",
+            strides=[1, 1], 
+            padding="same", 
+            use_bias=bias)
+    }
     self._lrelu = tf.keras.layers.LeakyReLU(alpha=0.2)
     self._beta = settings.Settings()["RDB"].get("residual_scale_beta", 0.2)
     self._first_call = first_call
@@ -345,11 +380,11 @@ class RDB(tf.keras.layers.Layer):
 class RRDB(tf.keras.layers.Layer):
   """ Residual in Residual Block Layer """
 
-  def __init__(self, out_features=32, first_call=True):
+  def __init__(self, growth_channel=32, num_features=32, first_call=True):
     super(RRDB, self).__init__()
-    self.RDB1 = RDB(out_features, first_call=first_call)
-    self.RDB2 = RDB(out_features, first_call=first_call)
-    self.RDB3 = RDB(out_features, first_call=first_call)
+    self.RDB1 = RDB(growth_channel=growth_channel, num_features=num_features, first_call=first_call)
+    self.RDB2 = RDB(growth_channel=growth_channel, num_features=num_features, first_call=first_call)
+    self.RDB3 = RDB(growth_channel=growth_channel, num_features=num_features, first_call=first_call)
     self.beta = settings.Settings()["RDB"].get("residual_scale_beta", 0.2)
 
   def call(self, input_):

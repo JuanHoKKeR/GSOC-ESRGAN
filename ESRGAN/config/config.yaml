@@ -5,14 +5,18 @@ checkpoint_path:
   phase_1: checkpoints/phase_1
   phase_2: checkpoints/phase_2
 dataset:
-  hr_dimension: 1024
+  hr_dimension: 512
   lr_dimension: 256
   name: Microscopy
   scale_method: bicubic
 discriminator:
   kimianet_weights: /workspace/model-kimianet/KimiaNetKerasWeights.h5
-  num_features: 16
+  num_features: 64
   type: densenet
+generator:
+  growth_channel: 32
+  num_features: 32
+  trunk_size: 11
 interpolation_parameter: 0.8
 print_step: 100
 train_combined:

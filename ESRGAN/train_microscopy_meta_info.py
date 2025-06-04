@@ -167,7 +167,7 @@ class CustomTrainer(train.Trainer):
 
     def smart_train_gan(self, generator, discriminator):
         """Entrena la fase GAN con ajuste automático de batch size"""
-        max_attempts = 3
+        max_attempts = 4
         original_batch_size = self.batch_size
         
         for attempt in range(max_attempts):
@@ -383,6 +383,13 @@ def main():
     dataset_config = sett.get("dataset", {})
     lr_dim = dataset_config.get("lr_dimension", 128)
     hr_dim = dataset_config.get("hr_dimension", 256)
+
+    upscale_factor = hr_dim // lr_dim
+
+    generator_config = sett.get("generator", {})
+    num_features = generator_config.get("num_features", 32)
+    trunk_size = generator_config.get("trunk_size", 11)
+    growth_channel = generator_config.get("growth_channel", 32)
     
     logging.info(f"🎯 Configuración automática:")
     logging.info(f"   - LR dimension: {lr_dim}x{lr_dim}")
@@ -403,7 +410,17 @@ def main():
                     "hr_dimension": hr_dim,
                     "hr_meta_file": args.hr_meta_file,
                     "lr_meta_file": args.lr_meta_file,
-                    "phase": args.phase
+                    "phase": args.phase,
+                    "model_dir": args.model_dir,
+                    "Upscale Factor": upscale_factor,
+                    "Generator": {
+                        "num_features": num_features,
+                        "trunk_size": trunk_size,
+                        "growth_channel": growth_channel
+                    },
+                    "Discriminator": {
+                        "type": sett.get("discriminator", {}).get("type", "densenet")
+                    }
                 }
             )
             use_wandb = True
@@ -437,7 +454,10 @@ def main():
         #discriminator = model.DenseNetDiscriminator(kimianet_weights_path=kimianet_weights_path)
         #discriminator = model.VGGArch(batch_size=sett["batch_size"], num_features=64)
         #discriminator = model.OptimizedVGGArch(batch_size=sett["batch_size"], num_features=32)
-        generator = model.RRDBNet(out_channel=3)
+
+        logging.info(f"Creando RRDBNet con {num_features} features, trunk_size={trunk_size}, growth_channel={growth_channel}, Factor={upscale_factor}")
+        # Crear el generador RRDBNet
+        generator = model.RRDBNet(out_channel=3, num_features=num_features, trunk_size=trunk_size, growth_channel=growth_channel, upscale_factor=upscale_factor)
         
         # Inicializar los parámetros del modelo - usar método call compatible con TF 2.11
         logging.info("Inicializando parámetros del generador...")
@@ -519,12 +539,15 @@ def main():
             #lr_dim = sett.get("dataset", {}).get("lr_dimension", 128)
             # Usar dimensions proporcionadas por la configuración
             interp_param = sett.get("interpolation_parameter", 0.8)
+
+            upscale_factor = hr_dim // lr_dim
             
             interpolated_generator = utils.interpolate_generator(
-                lambda: model.RRDBNet(out_channel=3, first_call=False),
+                lambda: model.RRDBNet(out_channel=3, num_features=num_features, trunk_size=trunk_size, growth_channel=growth_channel, upscale_factor=upscale_factor,first_call=False),
                 discriminator,
                 interp_param,
                 [hr_dim, hr_dim],  # Usar dimensiones consistentes
+                factor=upscale_factor,
                 basepath=args.model_dir
             )
             
