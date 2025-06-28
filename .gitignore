@@ -24,7 +24,8 @@ bazel-*
 ESRGAN/wandb
 ESRGAN/MicroscopyImages
 ESRGAN/Microscopy
-ESRGAN/datasets/
+ESRGAN/datasets/*
+!ESRGAN/datasets/.gitkeep
 ESRGAN/model
 ESRGAN/datasets/meta_info_64.txt
 ESRGAN/datasets/meta_info_128.txt
@@ -36,3 +37,6 @@ ESRGAN/model
 ESRGAN/Exported_Models
 ESRGAN/results
 ESRGAN/model-esrgantf2
+
+# Entorno Virtual
+esrgan-venv/
