@@ -186,24 +186,6 @@ def create_meta_pairs(hr_meta_file, lr_meta_file, output_dir, sample_size=None,
                 print(f"     HR: {os.path.basename(variant_pairs[i][1])} -> {hr_key}")
                 print(f"     ✅ Match: {lr_key == hr_key}")
     
-    # Generar archivo de configuración sugerida
-    config_suggestion = os.path.join(output_dir, "suggested_config.yaml")
-    with open(config_suggestion, 'w') as f:
-        f.write("# Configuración sugerida para dataset pre-shuffleado\n")
-        f.write("# Con dataset ya mezclado, usar buffer MÍNIMO\n\n")
-        f.write(f"dataset_info:\n")
-        f.write(f"  total_pairs: {len(pairs)}\n")
-        f.write(f"  shuffle_variants: {shuffle_variants}\n")
-        f.write(f"  pre_shuffled: true\n\n")
-        f.write("# Configuración TensorFlow optimizada\n")
-        f.write("tensorflow_config:\n")
-        f.write("  shuffle_buffer: 1  # MÍNIMO porque dataset ya está mezclado\n")
-        f.write("  prefetch_buffer: 1  # MÍNIMO para ahorrar memoria\n")
-        f.write("  num_parallel_calls: 2  # Reducido para 256→512\n\n")
-        f.write("# Para implementar en load_dataset_from_meta_info:\n")
-        f.write("# dataset = dataset.shuffle(1, reshuffle_each_iteration=False)\n")
-    
-    print(f"\n💡 Configuración sugerida guardada en: {config_suggestion}")
     
     return all_outputs
 
