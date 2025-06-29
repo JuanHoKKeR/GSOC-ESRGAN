@@ -1,0 +1,20 @@
+RESUMEN DE TIMING REALISTA - GPU
+==================================================
+
+INFORMACIÓN DEL SISTEMA:
+Dispositivo: GPU
+Platform: Linux-6.11.0-26-generic-x86_64-with-glibc2.31
+CPU: x86_64
+Cores: 16
+RAM: 31.05 GB
+GPU: Disponible (1 unidades)
+TensorFlow: 2.11.0
+
+ESTADÍSTICAS DE TIMING CON IMÁGENES REALES:
+
+256to1024_KimiaNet:
+  Tiempo promedio: 90.71 ms
+  FPS promedio: 26.43
+  Memoria promedio: 148.3 MB
+  Imágenes reales usadas: 100
+  Tamaño imagen: 256x256
