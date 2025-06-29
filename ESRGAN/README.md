@@ -89,7 +89,7 @@ python scripts/use_savedmodelTest.py \
 
 #### Ejemplo de Resultado Visual
 
-![Resultado visual 512→1024 KimiaNet](ESRGAN/Validation/Visual_Evaluations/512to1024_KimiaNet.jpg)
+![Resultado visual 512→1024 KimiaNet](Validation/Visual_Evaluations/512to1024_KimiaNet.jpg)
 
 #### `scripts/evaluate_model.py`
 Evaluación individual con métricas completas.
@@ -142,7 +142,7 @@ python scripts/visual_difference_analyzer.py \
 
 #### Ejemplo de Análisis de Diferencias
 
-![Análisis de diferencias - Patch 734](ESRGAN/Validation/Visual_Evaluations/TCGA-VQ-AA6B-01Z-00-DX1.C6CB7290-4A83-4963-8840-68BC208D1232_40x_512px_x23040_y20992_Patch734_difference_analysis.png)
+![Análisis de diferencias - Patch 734](Validation/Visual_Evaluations/TCGA-VQ-AA6B-01Z-00-DX1.C6CB7290-4A83-4963-8840-68BC208D1232_40x_512px_x23040_y20992_Patch734_difference_analysis.png)
 
 ### 4. **Benchmarking de Rendimiento**
 
@@ -183,7 +183,7 @@ python scripts/patch_based_superresolution.py \
 
 #### Ejemplo de Mapa de Diferencias Absolutas
 
-![Mapa de diferencias absolutas](ESRGAN/Validation/test_image_patch_v1_absolute_difference.png)
+![Mapa de diferencias absolutas](Validation/test_image_patch_v1_absolute_difference.png)
 
 ## ⚙️ **Configuración Detallada**
 
