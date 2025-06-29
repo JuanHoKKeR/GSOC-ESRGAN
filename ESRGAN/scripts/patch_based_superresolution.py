@@ -171,10 +171,10 @@ class PatchBasedSuperResolution:
         
         print(f"🔧 Reconstruyendo imagen: {original_h}x{original_w} → {reconstructed_h}x{reconstructed_w}")
         
-        # Inicializar imagen reconstruida
-        reconstructed = tf.zeros([reconstructed_h, reconstructed_w, 3], dtype=tf.float32)
+        # Convertir a Variable para permitir asignación
+        reconstructed = tf.Variable(tf.zeros([reconstructed_h, reconstructed_w, 3], dtype=tf.float32))
         
-        # Colocar cada parche en su posición
+        # Colocar cada parche en su posición - MÉTODO MÁS EFICIENTE
         patch_idx = 0
         for i in range(patches_h):
             for j in range(patches_w):
@@ -184,25 +184,11 @@ class PatchBasedSuperResolution:
                 x_start = j * self.output_patch_size
                 x_end = x_start + self.output_patch_size
                 
-                # Colocar parche
-                patch = processed_patches[patch_idx]
-                
-                # Usar tf.tensor_scatter_nd_update para actualizar la imagen
-                indices = []
-                updates = []
-                
-                for y in range(self.output_patch_size):
-                    for x in range(self.output_patch_size):
-                        for c in range(3):
-                            indices.append([y_start + y, x_start + x, c])
-                            updates.append(patch[y, x, c])
-                
-                indices = tf.constant(indices)
-                updates = tf.constant(updates)
-                reconstructed = tf.tensor_scatter_nd_update(reconstructed, indices, updates)
+                # Colocar parche directamente usando slicing
+                reconstructed[y_start:y_end, x_start:x_end, :].assign(processed_patches[patch_idx])
                 
                 patch_idx += 1
-        
+    
         print(f"✅ Imagen reconstruida: {reconstructed.shape}")
         return reconstructed
     
