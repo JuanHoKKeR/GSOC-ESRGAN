@@ -9,6 +9,13 @@ import argparse
 import numpy as np
 import tensorflow as tf
 import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.rcParams.update({
+    'font.family': 'serif',
+    'font.serif': ['Computer Modern Roman', 'Times', 'DejaVu Serif'],
+    'text.usetex': False,  # Cambia a True si tienes LaTeX instalado
+    'font.size': 12
+})
 from PIL import Image
 from pathlib import Path
 import json
@@ -254,26 +261,26 @@ class PatchBasedSuperResolution:
         # Imagen reconstruida
         plt.subplot(1, 3, 1)
         plt.imshow(generated_pil)
-        plt.title('Patch-based Reconstruction', fontweight='bold')
+        plt.title('Reconstrucción por Parches', fontweight='bold')
         plt.axis('off')
         
         # Ground truth
         plt.subplot(1, 3, 2)
         gt_pil = Image.fromarray(tf.cast(tf.clip_by_value(ground_truth, 0, 255), tf.uint8).numpy())
         plt.imshow(gt_pil)
-        plt.title('Ground Truth', fontweight='bold')
+        plt.title('Imagen de Referencia', fontweight='bold')
         plt.axis('off')
         
         # Diferencia absoluta
         plt.subplot(1, 3, 3)
         diff_display = np.mean(abs_diff.numpy(), axis=-1)  # Promedio de canales para visualización
         im = plt.imshow(diff_display, cmap='hot', vmin=0, vmax=0.3)
-        plt.title(f'Absolute Difference\nMean Error: {np.mean(diff_display):.4f}', fontweight='bold')
+        plt.title(f'Diferencia Absoluta\nError Promedio: {np.mean(diff_display):.4f}', fontweight='bold')
         plt.axis('off')
         plt.colorbar(im, fraction=0.046, pad=0.04)
         
         # Título general con métricas
-        plt.suptitle(f'Patch-based Super-Resolution Results - {image_name}\n' +
+        plt.suptitle(f'Resultados de Super-Resolución por Parches - {image_name}\n' +
                     f'PSNR: {metrics["psnr"]:.4f} dB | SSIM: {metrics["ssim"]:.4f} | MSE: {metrics["mse"]:.2f}',
                     fontsize=14, fontweight='bold')
         

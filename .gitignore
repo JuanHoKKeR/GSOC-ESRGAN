@@ -40,3 +40,6 @@ ESRGAN/model-esrgantf2
 
 # Entorno Virtual
 esrgan-venv/
+
+ESRGAN/Paper_results*
+ESRGAN/Validation

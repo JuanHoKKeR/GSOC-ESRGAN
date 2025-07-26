@@ -151,19 +151,6 @@ class ESRGANResultsAnalyzer:
             metrics_df: DataFrame con todas las métricas
             output_path: Ruta para guardar el gráfico
         """
-        # Configurar fuente Computer Modern y tamaños más grandes
-        plt.rcParams.update({
-            'font.family': ['serif'],
-            'font.serif': ['Computer Modern Roman', 'Times', 'DejaVu Serif'],
-            'font.size': 16,           # Tamaño base aumentado
-            'axes.titlesize': 20,      # Título principal
-            'axes.labelsize': 18,      # Etiquetas de ejes
-            'xtick.labelsize': 16,     # Etiquetas del eje X
-            'ytick.labelsize': 16,     # Etiquetas del eje Y
-            'legend.fontsize': 16,     # Leyenda
-            'figure.titlesize': 22     # Título de figura
-        })
-        
         # Filtrar modelos que van a 1024
         target_1024_models = ['64to1024', '128to1024', '256to1024', '512to1024']
         df_1024 = metrics_df[
@@ -176,21 +163,12 @@ class ESRGANResultsAnalyzer:
             return
         
         # Crear figura con subplots para cada métrica
-        fig, axes = plt.subplots(2, 3, figsize=(20, 14))
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
         axes = axes.ravel()
         
         # Configurar estilo
         sns.set_style("whitegrid")
         colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4']
-        
-        # Nombres de métricas en español
-        metric_names_spanish = {
-            'psnr': 'PSNR (dB)',
-            'ssim': 'SSIM',
-            'ms_ssim': 'MS-SSIM',
-            'perceptual_index': 'Índice Perceptual',
-            'mse': 'Error Cuadrático Medio'
-        }
         
         # Crear violín para cada métrica
         metrics_to_plot = ['psnr', 'ssim', 'ms_ssim', 'perceptual_index', 'mse']
@@ -221,15 +199,16 @@ class ESRGANResultsAnalyzer:
             ax.set_xticklabels([f'{model}\n(×{self.model_configs[model]["scale"]})' 
                               for model in target_1024_models], rotation=45)
             
-            # Título y labels en español
-            metric_display = metric_names_spanish[metric]
-            if metric in ['perceptual_index', 'mse']:
-                ax.set_ylabel(f'{metric_display} (menor es mejor)')
+            # Título y labels
+            metric_name = metric.upper().replace('_', '-')
+            if metric == 'perceptual_index':
+                ax.set_ylabel(f'{metric_name} (lower is better)')
+            elif metric == 'mse':
+                ax.set_ylabel(f'{metric_name} (lower is better)')
             else:
-                ax.set_ylabel(f'{metric_display} (mayor es mejor)')
+                ax.set_ylabel(f'{metric_name} (higher is better)')
                 
-            ax.set_title(f'Distribución de {metric_display} por Factor de Escala', fontweight='bold')
-            ax.set_xlabel('Modelo (Factor de Escala)')
+            ax.set_title(f'Distribution of {metric_name} by Scale Factor', fontweight='bold')
             ax.grid(True, alpha=0.3)
             
             # Agregar estadísticas en el gráfico
@@ -243,20 +222,19 @@ class ESRGANResultsAnalyzer:
             # Agregar texto de estadísticas
             stats_str = '\n'.join(stats_text)
             ax.text(0.02, 0.98, stats_str, transform=ax.transAxes, 
-                   verticalalignment='top', fontsize=12, 
+                   verticalalignment='top', fontsize=8, 
                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
         
         # Ocultar subplot extra
         if len(metrics_to_plot) < len(axes):
             axes[-1].set_visible(False)
         
-        # Título general en español
-        fig.suptitle('Distribución de Métricas para Modelos con Resolución Objetivo 1024×1024\n' +
-                    'Comparación Entre Diferentes Factores de Escala', 
-                    fontweight='bold', y=0.96)
+        # Título general
+        fig.suptitle('Distribution of Metrics for Models Targeting 1024×1024 Resolution\n' +
+                    'Comparison Across Different Scale Factors', 
+                    fontsize=16, fontweight='bold', y=0.95)
         
         plt.tight_layout()
-        plt.subplots_adjust(top=0.90)  # Ajustar para el título
         plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
         plt.close()
         
@@ -265,10 +243,7 @@ class ESRGANResultsAnalyzer:
         # Crear tabla estadística
         self._create_statistics_table_1024(df_1024, target_1024_models, 
                                           output_path.replace('.png', '_stats.csv'))
-        
-        # Restaurar configuración por defecto
-        plt.rcdefaults()
-
+    
     def _create_statistics_table_1024(self, df_1024, models, output_path):
         """Crea tabla de estadísticas para los modelos 1024"""
         stats_data = []
@@ -480,149 +455,73 @@ class ESRGANResultsAnalyzer:
     def _create_additional_analysis(self, metrics_df, timing_df, output_dir):
         """Crea análisis estadístico adicional"""
         
-        # Configurar fuente Computer Modern
-        plt.rcParams.update({
-            'font.family': ['serif'],
-            'font.serif': ['Computer Modern Roman', 'Times', 'DejaVu Serif'],
-            'font.size': 16,
-            'axes.titlesize': 20,
-            'axes.labelsize': 18,
-            'xtick.labelsize': 16,
-            'ytick.labelsize': 16,
-            'legend.fontsize': 16
-        })
-        
         # Análisis de correlaciones
         if metrics_df is not None:
             color_metrics = metrics_df[metrics_df['image_type'] == 'color']
             correlation_data = color_metrics[self.metrics + ['scale_factor']].corr()
             
-            plt.figure(figsize=(12, 10))
+            # Configurar fuente Computer Modern y tamaño
+            plt.rcParams['font.family'] = 'serif'
+            plt.rcParams['font.serif'] = ['Computer Modern Roman', 'Times', 'DejaVu Serif']
+
+            plt.rcParams['font.size'] = 14
             
-            # Crear máscara triangular
-            mask = np.triu(np.ones_like(correlation_data, dtype=bool))
-            
-            sns.heatmap(correlation_data, annot=True, cmap='RdBu_r', center=0,
-                       square=True, fmt='.3f', mask=mask,
-                       cbar_kws={"shrink": .8, "label": "Coeficiente de Correlación"},
-                       annot_kws={"size": 14})
-            
-            plt.title('Matriz de Correlación de Métricas y Factor de Escala\n(Solo Imágenes a Color)', 
-                     fontweight='bold', pad=25)
-            plt.xlabel('Métricas')
-            plt.ylabel('Métricas')
-            
-            # Agregar explicación en español
-            explanation = ("Interpretación:\n"
-                          "• +1: Correlación positiva perfecta\n"
-                          "• 0: Sin correlación lineal\n"
-                          "• -1: Correlación negativa perfecta\n"
-                          "• |r| > 0.7: Correlación fuerte\n"
-                          "• |r| < 0.3: Correlación débil")
-            
-            plt.text(1.15, 0.5, explanation, transform=plt.gca().transAxes,
-                    verticalalignment='center', fontsize=14,
-                    bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
-            
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(correlation_data, annot=True, cmap='coolwarm', center=0,
+                       square=True, fmt='.3f', annot_kws={'size': 14})
+            plt.title('Matriz de Correlación y Factores de Escala', fontsize=16)
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, "correlation_matrix.png"), dpi=300, bbox_inches='tight')
+            plt.savefig(os.path.join(output_dir, "correlation_matrix.png"), dpi=300)
             plt.close()
+            
+            # Restaurar configuración por defecto
+            plt.rcParams.update(plt.rcParamsDefault)
             
             # Guardar matriz de correlación
             correlation_data.to_csv(os.path.join(output_dir, "correlation_matrix.csv"))
-            print("📊 Matriz de correlación guardada")
         
         # Análisis de eficiencia (si hay timing)
         if timing_df is not None and metrics_df is not None:
             self._create_efficiency_analysis(metrics_df, timing_df, output_dir)
-        
-        # Restaurar configuración por defecto
-        plt.rcdefaults()
     
     def _create_efficiency_analysis(self, metrics_df, timing_df, output_dir):
         """Crea análisis de eficiencia (calidad vs velocidad)"""
         
-        # Configurar fuente Computer Modern
-        plt.rcParams.update({
-            'font.family': ['serif'],
-            'font.serif': ['Computer Modern Roman', 'Times', 'DejaVu Serif'],
-            'font.size': 16,
-            'axes.titlesize': 20,
-            'axes.labelsize': 18,
-            'xtick.labelsize': 16,
-            'ytick.labelsize': 16,
-            'legend.fontsize': 16
-        })
-        
         # Combinar métricas y timing
         color_metrics = metrics_df[metrics_df['image_type'] == 'color']
+        gpu_timing = timing_df[timing_df['device'] == 'gpu']
         
-        # Análisis separado para GPU y CPU
-        devices = ['gpu', 'cpu']
-        device_names = {'gpu': 'GPU', 'cpu': 'CPU'}
+        # Calcular promedios por modelo
+        metrics_avg = color_metrics.groupby('model_name')[self.metrics].mean().reset_index()
+        timing_avg = gpu_timing.groupby('model_name')[['mean_time_ms', 'fps']].mean().reset_index()
         
-        for device in devices:
-            device_timing = timing_df[timing_df['device'] == device]
-            
-            if len(device_timing) == 0:
-                print(f"⚠️  No hay datos de timing para {device.upper()}")
-                continue
-            
-            # Calcular promedios por modelo
-            metrics_avg = color_metrics.groupby('model_name')[self.metrics].mean().reset_index()
-            timing_avg = device_timing.groupby('model_name')[['mean_time_ms', 'fps']].mean().reset_index()
-            
-            # Combinar datos
-            efficiency_data = pd.merge(metrics_avg, timing_avg, on='model_name', how='inner')
-            
-            if len(efficiency_data) == 0:
-                print(f"⚠️  No hay datos combinados para {device.upper()}")
-                continue
-            
+        # Combinar datos
+        efficiency_data = pd.merge(metrics_avg, timing_avg, on='model_name', how='inner')
+        
+        if len(efficiency_data) > 0:
             # Gráfico de eficiencia: PSNR vs Tiempo
-            plt.figure(figsize=(14, 10))
+            plt.figure(figsize=(12, 8))
             
             scatter = plt.scatter(efficiency_data['mean_time_ms'], efficiency_data['psnr'], 
-                                s=150, alpha=0.7, c=efficiency_data['ssim'], 
-                                cmap='viridis', edgecolors='black', linewidth=0.8)
+                                s=100, alpha=0.7, c=efficiency_data['ssim'], cmap='viridis')
             
             for i, model in enumerate(efficiency_data['model_name']):
                 plt.annotate(model, (efficiency_data['mean_time_ms'].iloc[i], 
                             efficiency_data['psnr'].iloc[i]),
-                           xytext=(8, 8), textcoords='offset points', fontsize=12,
-                           bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+                           xytext=(5, 5), textcoords='offset points', fontsize=8)
             
-            plt.xlabel('Tiempo de Inferencia (ms)')
+            plt.xlabel('Inference Time (ms)')
             plt.ylabel('PSNR (dB)')
-            plt.title(f'Compromiso Calidad vs Velocidad (Inferencia {device_names[device]})', 
-                     fontweight='bold', pad=25)
-            
-            # Colorbar con mejor formato
-            cbar = plt.colorbar(scatter, label='SSIM')
-            cbar.ax.tick_params(labelsize=14)
-            
+            plt.title('Quality vs Speed Trade-off (GPU Inference)')
+            plt.colorbar(scatter, label='SSIM')
             plt.grid(True, alpha=0.3)
             
-            # Agregar información en español
-            info_text = f"Dispositivo: {device_names[device]}\nModelos: {len(efficiency_data)}\n"
-            info_text += f"Rango de tiempo: {efficiency_data['mean_time_ms'].min():.1f}-{efficiency_data['mean_time_ms'].max():.1f} ms\n"
-            info_text += f"Rango PSNR: {efficiency_data['psnr'].min():.2f}-{efficiency_data['psnr'].max():.2f} dB"
-            
-            plt.text(0.02, 0.98, info_text, transform=plt.gca().transAxes, 
-                    verticalalignment='top', fontsize=14, 
-                    bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-            
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, f"efficiency_analysis_{device}.png"), 
-                       dpi=300, bbox_inches='tight')
+            plt.savefig(os.path.join(output_dir, "efficiency_analysis.png"), dpi=300)
             plt.close()
             
             # Guardar datos de eficiencia
-            efficiency_data.to_csv(os.path.join(output_dir, f"efficiency_data_{device}.csv"), index=False)
-            print(f"📈 Análisis de eficiencia {device.upper()} guardado")
-        
-        # Restaurar configuración por defecto
-        plt.rcdefaults()
+            efficiency_data.to_csv(os.path.join(output_dir, "efficiency_data.csv"), index=False)
 
 def main():
     """Función principal"""
